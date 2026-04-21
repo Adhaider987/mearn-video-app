@@ -4,6 +4,13 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const mongoose = require("mongoose");
+const jwt = require("jsonwebtoken");
+
+const authRoutes = require("./routes/auth");
+const friendRoutes = require("./routes/friends");
+const User = require("./models/User");
+const Message = require("./models/Message");
 
 function parseClientOrigins() {
   const raw =
@@ -28,6 +35,7 @@ const io = new Server(server, {
   },
 });
 
+// Middleware
 app.use(
   cors({
     origin: clientOrigins,
@@ -36,142 +44,138 @@ app.use(
 );
 app.use(express.json());
 
+// DB Connection
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => console.log("Connected to MongoDB"))
+  .catch((err) => console.error("MongoDB connection error:", err));
+
+// Routes
+app.use("/api/auth", authRoutes);
+app.use("/api/friends", friendRoutes);
+
 app.get("/", (req, res) => {
-  res.type("text").send("Video call signaling server is running.");
+  res.type("text").send("Video call backend is running.");
 });
 
-function countSocketsInRoom(roomId) {
-  const room = io.sockets.adapter.rooms.get(roomId);
-  return room ? room.size : 0;
+// Socket Helpers
+const userSockets = new Map(); // userId -> Set(socketIds)
+
+function getSocketIdsByUserId(userId) {
+  return userSockets.get(userId.toString()) || new Set();
 }
 
-function normalizeRoomId(roomId) {
-  if (typeof roomId !== "string") return "";
-  return roomId.trim();
-}
+io.on("connection", async (socket) => {
+  const token = socket.handshake.auth.token;
+  let userId = null;
 
-io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      userId = decoded.id;
+      
+      if (!userSockets.has(userId)) {
+        userSockets.set(userId, new Set());
+      }
+      userSockets.get(userId).add(socket.id);
+      
+      // Update online status
+      await User.findByIdAndUpdate(userId, { online: true });
+      socket.broadcast.emit("user-status", { userId, online: true });
+      
+      console.log(`User ${userId} authenticated on socket ${socket.id}`);
+    } catch (err) {
+      console.log("Invalid token on socket connection");
+    }
+  }
 
   socket.on("join-room", (roomId, ack) => {
-    const rid = normalizeRoomId(roomId);
-    if (!rid) {
-      socket.emit("room-error", { message: "Invalid room id." });
-      if (typeof ack === "function") ack({ ok: false, error: "invalid" });
-      return;
-    }
-
-    // Leave any previous signaling rooms so one socket cannot occupy multiple rooms (e.g. after changing room id).
-    for (const room of [...socket.rooms]) {
-      if (room !== socket.id) {
-        socket.leave(room);
-      }
-    }
-
-    const count = countSocketsInRoom(rid);
-    if (count >= 2) {
-      socket.emit("room-error", {
-        message: "Room is full (max 2 participants).",
-      });
-      if (typeof ack === "function") ack({ ok: false, error: "full" });
-      return;
-    }
-
-    socket.join(rid);
-    console.log(`${socket.id} joined room ${rid} (size now ${countSocketsInRoom(rid)})`);
-    socket.emit("joined-room", { roomId: rid });
-    if (typeof ack === "function") ack({ ok: true, roomId: rid });
+    if (!roomId) return;
+    socket.join(roomId);
+    
+    // Notify others in the room
+    socket.to(roomId).emit("peer-joined", { socketId: socket.id, userId });
+    
+    if (typeof ack === "function") ack({ ok: true, roomId });
   });
 
   socket.on("leave-room", (roomId) => {
-    const rid = normalizeRoomId(roomId);
-    if (!rid) return;
-    socket.to(rid).emit("peer-left", { socketId: socket.id });
-    socket.leave(rid);
+    if (!roomId) return;
+    socket.leave(roomId);
+    socket.to(roomId).emit("peer-left", { socketId: socket.id, userId });
   });
 
-  socket.on("call-request", ({ roomId, displayName }) => {
-    const rid = normalizeRoomId(roomId);
-    if (!rid) return;
-    const size = countSocketsInRoom(rid);
-    if (size < 2) {
-      socket.emit("call-failed", {
-        reason: "no-peer",
-        message: "Nobody else is in this room yet. Ask them to enter the room first.",
+  // Private Messaging
+  socket.on("send-message", async (data) => {
+    const { receiverId, content, room } = data;
+    if (!userId) return;
+
+    try {
+      const message = new Message({
+        sender: userId,
+        receiver: receiverId,
+        room,
+        content,
       });
-      return;
-    }
-    socket.to(rid).emit("incoming-call", {
-      from: socket.id,
-      displayName:
-        typeof displayName === "string" && displayName.trim()
-          ? displayName.trim()
-          : "Someone",
-      roomId: rid,
-    });
-  });
+      await message.save();
 
-  socket.on("call-accept", ({ roomId, callerId }) => {
-    const rid = normalizeRoomId(roomId);
-    if (!rid || !callerId) return;
-    io.to(callerId).emit("call-accepted", {
-      from: socket.id,
-      roomId: rid,
-    });
-  });
+      const populatedMessage = await message.populate("sender", "username avatar");
 
-  socket.on("call-reject", ({ roomId, callerId }) => {
-    if (!callerId) return;
-    const rid = normalizeRoomId(roomId);
-    io.to(callerId).emit("call-rejected", {
-      from: socket.id,
-      roomId: rid,
-    });
-  });
-
-  socket.on("call-cancel", ({ roomId }) => {
-    const rid = normalizeRoomId(roomId);
-    if (!rid) return;
-    socket.to(rid).emit("call-cancelled", {
-      from: socket.id,
-      roomId: rid,
-    });
-  });
-
-  socket.on("offer", ({ roomId, offer }) => {
-    const rid = normalizeRoomId(roomId);
-    if (!rid || !offer) return;
-    socket.to(rid).emit("offer", { offer, from: socket.id });
-  });
-
-  socket.on("answer", ({ roomId, answer }) => {
-    const rid = normalizeRoomId(roomId);
-    if (!rid || !answer) return;
-    socket.to(rid).emit("answer", { answer, from: socket.id });
-  });
-
-  socket.on("ice-candidate", ({ roomId, candidate }) => {
-    const rid = normalizeRoomId(roomId);
-    if (!rid) return;
-    // `candidate` may be null (end-of-candidates); still forward it.
-    if (candidate === undefined) return;
-    socket.to(rid).emit("ice-candidate", { candidate, from: socket.id });
-  });
-
-  socket.on("disconnecting", () => {
-    for (const roomId of socket.rooms) {
-      if (roomId === socket.id) continue;
-      socket.to(roomId).emit("peer-disconnected", { socketId: socket.id });
+      if (room) {
+        // Group message
+        io.to(room).emit("new-message", populatedMessage);
+      } else if (receiverId) {
+        // Private message
+        const targetSockets = getSocketIdsByUserId(receiverId);
+        targetSockets.forEach((sid) => {
+          io.to(sid).emit("new-message", populatedMessage);
+        });
+        // Also send back to sender's other sockets
+        const senderSockets = getSocketIdsByUserId(userId);
+        senderSockets.forEach((sid) => {
+          if (sid !== socket.id) io.to(sid).emit("new-message", populatedMessage);
+        });
+        socket.emit("new-message", populatedMessage);
+      }
+    } catch (err) {
+      console.error("Error sending message:", err);
     }
   });
 
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
+  // WebRTC Signaling (modified for multi-peer/group)
+  socket.on("signal", (data) => {
+    const { to, signal, roomId } = data;
+    if (to) {
+      // Direct signaling to a specific socket
+      io.to(to).emit("signal", { from: socket.id, userId, signal });
+    } else if (roomId) {
+      // Broadcast signaling to room (usually for initial discover)
+      socket.to(roomId).emit("signal", { from: socket.id, userId, signal });
+    }
+  });
+
+  // Reactions
+  socket.on("reaction", (data) => {
+    const { roomId, reaction } = data;
+    if (roomId) {
+      socket.to(roomId).emit("reaction", { from: userId, reaction });
+    }
+  });
+
+  socket.on("disconnect", async () => {
+    if (userId && userSockets.has(userId)) {
+      userSockets.get(userId).delete(socket.id);
+      if (userSockets.get(userId).size === 0) {
+        userSockets.delete(userId);
+        await User.findByIdAndUpdate(userId, { online: false, lastSeen: Date.now() });
+        socket.broadcast.emit("user-status", { userId, online: false });
+      }
+    }
+    console.log("Socket disconnected:", socket.id);
   });
 });
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server listening on http://localhost:${PORT} (all interfaces)`);
-  console.log(`CLIENT_ORIGINS: ${clientOrigins.join(", ")}`);
+  console.log(`Server listening on http://localhost:${PORT}`);
 });
