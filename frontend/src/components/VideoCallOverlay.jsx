@@ -63,8 +63,16 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     const startMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: type === 'video', // Only request video if it's a video call
-          audio: true,
+          video: type === 'video' ? {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 }
+          } : false,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
         });
 
         // If audio call, ensure tracks are disabled immediately as backup
@@ -368,18 +376,29 @@ const VideoCallOverlay = ({ callData, onClose }) => {
 
   const startScreenShare = async () => {
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const stream = await navigator.mediaDevices.getDisplayMedia({ 
+        video: { cursor: "always", frameRate: 30 },
+        audio: false 
+      });
       const screenTrack = stream.getVideoTracks()[0];
 
       // Replace track for all peers
-      Object.values(peers).forEach(pc => {
-        const sender = pc.getSenders().find(s => s.track.kind === 'video');
-        if (sender) sender.replaceTrack(screenTrack);
-      });
+      for (const [pId, pData] of Object.entries(peers)) {
+        const { pc, socketId } = pData;
+        const sender = pc.getSenders().find(s => s.track?.kind === 'video' || (s.track === null && pc.getTransceivers().find(t => t.sender === s && t.receiver.track.kind === 'video')));
+        
+        if (sender) {
+          await sender.replaceTrack(screenTrack);
+        } else {
+          pc.addTrack(screenTrack, stream);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit("signal", { to: socketId, signal: { type: 'offer', sdp: offer }, roomId });
+        }
+      }
 
       setScreenStream(stream);
       setIsSharingScreen(true);
-      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
       screenTrack.onended = () => stopScreenShare();
       
@@ -395,15 +414,22 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     }
     
     // Switch back to camera
-    const cameraTrack = localStream.getVideoTracks()[0];
-    Object.values(peers).forEach(pc => {
-      const sender = pc.getSenders().find(s => s.track.kind === 'video');
-      if (sender) sender.replaceTrack(cameraTrack);
-    });
+    const cameraTrack = localStream?.getVideoTracks()[0];
+    
+    for (const [pId, pData] of Object.entries(peers)) {
+      const { pc, socketId } = pData;
+      const sender = pc.getSenders().find(s => s.track?.kind === 'video' || s.track === null);
+      if (sender) {
+        if (cameraTrack && !isVideoOff) {
+          sender.replaceTrack(cameraTrack);
+        } else {
+          sender.replaceTrack(null);
+        }
+      }
+    }
 
     setScreenStream(null);
     setIsSharingScreen(false);
-    if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
     
     socket.emit("device-status", { roomId, status: { sharingScreen: false } });
   };
@@ -490,7 +516,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         <div className="flex-1 grid grid-cols-1 grid-rows-[1fr_auto] gap-4 p-6 overflow-hidden">
           <div className="bg-black rounded-[32px] overflow-hidden relative shadow-premium border border-white/10">
             {isSharingScreen ? (
-              <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+              <LocalVideo stream={screenStream} />
             ) : (
               <RemoteVideo stream={remoteStreams[spotlightUserId]} />
             )}
@@ -499,12 +525,18 @@ const VideoCallOverlay = ({ callData, onClose }) => {
             </div>
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
-            {!isSharingScreen && (
-              <div className="w-[160px] aspect-[4/3] relative flex-shrink-0 rounded-2xl overflow-hidden shadow-lg border border-white/10 bg-premium-bg-alt">
-                <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                <div className="absolute bottom-2 left-2 bg-black/50 backdrop-blur-md px-2 py-0.5 rounded text-[10px]">You</div>
-              </div>
-            )}
+            <div className="w-[160px] aspect-[4/3] relative flex-shrink-0 rounded-2xl overflow-hidden shadow-lg border border-white/10 bg-premium-bg-alt">
+              {isVideoOff ? (
+                <div className="w-full h-full flex flex-col items-center justify-center bg-[#1f2028] gap-1">
+                  <div className="w-8 h-8 rounded-lg bg-premium-accent flex items-center justify-center text-white text-xs font-bold uppercase">
+                    {user.username[0]}
+                  </div>
+                </div>
+              ) : (
+                <LocalVideo stream={localStream} />
+              )}
+              <div className="absolute bottom-2 left-2 bg-black/50 backdrop-blur-md px-2 py-0.5 rounded text-[10px]">You</div>
+            </div>
             {Object.entries(remoteStreams).filter(([uid]) => uid !== spotlightUserId).map(([peerId, stream]) => (
               <div key={peerId} className="w-[160px] aspect-[4/3] relative flex-shrink-0 rounded-2xl overflow-hidden shadow-lg border border-white/10 bg-premium-bg-alt">
                 <RemoteVideo stream={stream} />
@@ -562,7 +594,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         <button onClick={toggleVideo} className={`dock-btn ${isVideoOff ? 'danger' : ''}`}>
           {isVideoOff ? <VideoOff size={22} /> : <Video size={22} />}
         </button>
-        <button onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={`dock-btn ${isSharingScreen ? 'active' : ''}`}>
+        <button onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={`dock-btn ${isSharingScreen ? 'active' : ''} hidden md:flex`}>
           {isSharingScreen ? <MonitorOff size={22} /> : <Monitor size={22} />}
         </button>
         
