@@ -80,10 +80,10 @@ io.on("connection", async (socket) => {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       userId = decoded.id;
       
-      if (!userSockets.has(userId)) {
-        userSockets.set(userId, new Set());
+      if (!userSockets.has(userId.toString())) {
+        userSockets.set(userId.toString(), new Set());
       }
-      userSockets.get(userId).add(socket.id);
+      userSockets.get(userId.toString()).add(socket.id);
       
       // Update online status
       await User.findByIdAndUpdate(userId, { online: true });

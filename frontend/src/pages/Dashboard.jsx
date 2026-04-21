@@ -62,7 +62,7 @@ const Dashboard = () => {
           action: {
             label: "Join",
             onClick: () => {
-              setActiveCall({ roomId, friend: sender, type });
+              setActiveCall({ roomId, friend: sender, type, isIncoming: true });
               socket.emit("call-response", { callerId: sender._id, accept: true, roomId });
             }
           },
@@ -77,10 +77,12 @@ const Dashboard = () => {
 
       const handleNewMessage = (msg) => {
         const currentPath = location.pathname;
-        const senderId = msg.sender._id;
+        const senderId = (msg.sender._id || msg.sender.id)?.toString();
         
-        // Only notify if not in the active chat with this person
-        if (!currentPath.includes(`/dashboard/chat/${senderId}`)) {
+        // Only notify if not actively in the chat with this person
+        const isCurrentChat = currentPath.endsWith(`/chat/${senderId}`) || currentPath.includes(`/chat/${senderId}/`);
+
+        if (!isCurrentChat) {
           toast.message(`New message from ${msg.sender.username}`, {
             description: msg.content.length > 30 ? msg.content.substring(0, 30) + "..." : msg.content,
             action: {

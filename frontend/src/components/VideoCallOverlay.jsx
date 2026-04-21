@@ -24,11 +24,12 @@ const ICE_SERVERS = {
 const VideoCallOverlay = ({ callData, onClose }) => {
   const { user } = useAuth();
   const socket = useSocket();
-  const { roomId, friend, type } = callData;
+  const { roomId, friend, type, isIncoming } = callData;
 
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({}); // userId -> stream
   const [peers, setPeers] = useState({}); // userId -> RTCPeerConnection
+  const pendingCandidates = useRef({}); // userId -> [candidates]
   
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(type === 'audio');
@@ -50,12 +51,14 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         // Join the signaling room
         socket.emit("join-room", roomId);
 
-        // Notify the target user about the incoming call
-        socket.emit("start-call", {
-          targetUserId: friend._id,
-          type: type,
-          roomId: roomId
-        });
+        // Notify the target user about the incoming call ONLY if we are the caller
+        if (!isIncoming) {
+          socket.emit("start-call", {
+            targetUserId: friend._id,
+            type: type,
+            roomId: roomId
+          });
+        }
       } catch (err) {
         console.error("Error accessing media devices:", err);
         alert("Could not access camera or microphone.");
@@ -106,22 +109,48 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     if (!socket || !localStream) return;
 
     const handleSignal = async ({ from, userId: signalingUserId, signal }) => {
-      let pc = peers[signalingUserId];
+      try {
+        let pc = peers[signalingUserId];
 
-      if (!pc) {
-        pc = createPeerConnection(signalingUserId, from, false);
-        setPeers(prev => ({ ...prev, [signalingUserId]: pc }));
-      }
+        if (!pc) {
+          pc = createPeerConnection(signalingUserId, from, false);
+          setPeers(prev => ({ ...prev, [signalingUserId]: pc }));
+        }
 
-      if (signal.type === 'offer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit("signal", { to: from, signal: { type: 'answer', sdp: answer }, roomId });
-      } else if (signal.type === 'answer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-      } else if (signal.type === 'candidate') {
-        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        const drainQueue = async (userId, peerConnection) => {
+          const queue = pendingCandidates.current[userId] || [];
+          while (queue.length > 0) {
+            const candidate = queue.shift();
+            try {
+              await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (e) {
+              console.warn("Failed to apply queued candidate", e);
+            }
+          }
+          pendingCandidates.current[userId] = [];
+        };
+
+        if (signal.type === 'offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          socket.emit("signal", { to: from, signal: { type: 'answer', sdp: answer }, roomId });
+          await drainQueue(signalingUserId, pc);
+        } else if (signal.type === 'answer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          await drainQueue(signalingUserId, pc);
+        } else if (signal.type === 'candidate') {
+          if (pc.remoteDescription) {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          } else {
+            if (!pendingCandidates.current[signalingUserId]) {
+              pendingCandidates.current[signalingUserId] = [];
+            }
+            pendingCandidates.current[signalingUserId].push(signal.candidate);
+          }
+        }
+      } catch (err) {
+        console.error("Signaling error:", err);
       }
     };
 
@@ -145,6 +174,9 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         const newStreams = { ...remoteStreams };
         delete newStreams[leftUserId];
         setRemoteStreams(newStreams);
+
+        // Clear candidates queue
+        delete pendingCandidates.current[leftUserId];
       }
     };
 

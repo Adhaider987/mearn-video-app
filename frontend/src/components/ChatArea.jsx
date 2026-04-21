@@ -27,7 +27,7 @@ const ChatArea = () => {
       return res.data;
     }
   });
-  const friend = friends.find(f => f._id === friendId);
+  const friend = friends.find(f => f._id?.toString() === friendId || f.id?.toString() === friendId);
 
   // Fetch Message History
   const { data: history = [], isLoading: isHistoryLoading } = useQuery({
