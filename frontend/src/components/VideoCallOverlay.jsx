@@ -188,16 +188,23 @@ const VideoCallOverlay = ({ callData, onClose }) => {
       }, 4000);
     };
 
+    const handleCallEnded = () => {
+      console.log("Call ended by peer");
+      onClose();
+    };
+
     socket.on("signal", handleSignal);
     socket.on("peer-joined", handlePeerJoined);
     socket.on("peer-left", handlePeerLeft);
     socket.on("reaction", handleReaction);
+    socket.on("call-ended", handleCallEnded);
 
     return () => {
       socket.off("signal");
       socket.off("peer-joined");
       socket.off("peer-left");
       socket.off("reaction");
+      socket.off("call-ended");
     };
   }, [socket, localStream, peers, createPeerConnection, remoteStreams]);
 
@@ -227,6 +234,11 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     setTimeout(() => {
       setReactions(prev => prev.filter(r => r.id !== id));
     }, 4000);
+  };
+
+  const handleHangUp = () => {
+    socket.emit("hang-up", { roomId });
+    onClose();
   };
 
   return (
@@ -259,10 +271,10 @@ const VideoCallOverlay = ({ callData, onClose }) => {
           <h3>{friend.username}</h3>
           <span style={timeStyle}>00:00</span>
         </div>
-        <button onClick={onClose} style={closeBtn}><X size={24} /></button>
+        <button onClick={handleHangUp} style={closeBtn}><X size={24} /></button>
       </header>
 
-      <div style={videoGrid}>
+      <div className="video-grid">
         {/* Remote Videos */}
         {Object.entries(remoteStreams).map(([userId, stream]) => (
           <div key={userId} style={videoCard}>
@@ -272,7 +284,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         ))}
         
         {/* Local Video */}
-        <div style={localVideoCard}>
+        <div className="local-video-container">
           <video 
             ref={localVideoRef} 
             autoPlay 
@@ -284,8 +296,8 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         </div>
       </div>
 
-      <footer style={callFooter}>
-        <div style={controlsRow}>
+      <footer className="call-footer" style={callFooter}>
+        <div className="controls-row" style={controlsRow}>
           <button onClick={toggleMute} style={isMuted ? controlBtnOff : controlBtn}>
             {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
           </button>
@@ -301,7 +313,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
             <button onClick={() => sendReaction('🔥')} style={reactionBtn}>🔥</button>
           </div>
 
-          <button onClick={onClose} style={hangupBtn}>
+          <button onClick={handleHangUp} style={hangupBtn}>
             <PhoneOff size={24} />
           </button>
         </div>
@@ -375,17 +387,19 @@ const videoGrid = {
   flex: 1,
   padding: "20px",
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))",
-  gap: "20px",
+  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", // Reduced min-width
+  gap: "10px",
   alignItems: "center",
   justifyContent: "center",
+  overflowY: "auto",
 };
 
 const videoCard = {
   position: "relative",
   width: "100%",
   height: "100%",
-  maxHeight: "500px",
+  maxHeight: "400px", // Reduced
+  aspectRatio: "16/9",
   borderRadius: "24px",
   overflow: "hidden",
   background: "#16171d",
@@ -394,11 +408,12 @@ const videoCard = {
 
 const localVideoCard = {
   ...videoCard,
-  width: "240px",
-  height: "160px",
+  width: "min(160px, 30vw)",
+  height: "auto",
+  aspectRatio: "4/3",
   position: "absolute",
-  bottom: "120px",
-  right: "40px",
+  bottom: "140px",
+  right: "20px",
   zIndex: 20,
   boxShadow: "0 20px 40px rgba(0,0,0,0.4)",
 };

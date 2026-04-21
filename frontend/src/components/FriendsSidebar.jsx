@@ -150,7 +150,8 @@ const FriendsSidebar = () => {
 
 // Styles
 const sidebarStyle = {
-  width: "320px",
+  flex: 1,
+  minWidth: 0,
   borderRight: "1px solid var(--border)",
   display: "flex",
   flexDirection: "column",

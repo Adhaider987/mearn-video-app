@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Video, Phone, MoreVertical, Smile, Paperclip } from "lucide-react";
+import { Send, Video, Phone, MoreVertical, Smile, Paperclip, ArrowLeft } from "lucide-react";
 import { useParams, useOutletContext } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import apiInstance from "../api/apiInstance";
@@ -56,7 +56,13 @@ const ChatArea = () => {
         const isFromMe = msg.sender._id === currentUserId && msg.receiver === friendId;
 
         if (isFromFriend || isFromMe) {
-          setMessages(prev => [...prev, msg]);
+          setMessages(prev => {
+            // Prevent duplicates
+            if (msg._id && prev.find(m => m._id === msg._id)) return prev;
+            const newMessages = [...prev, msg];
+            // Sort by timestamp to ensure correct order
+            return newMessages.sort((a, b) => new Date(a.createdAt || Date.now()) - new Date(b.createdAt || Date.now()));
+          });
         }
       };
 
@@ -84,8 +90,8 @@ const ChatArea = () => {
 
   const onStartCall = (type) => {
     if (!friend) return;
-    const roomId = [user.id, friend._id].sort().join("-");
-    setActiveCall({ roomId, friend, type });
+    const roomId = [user._id, friend._id].sort().join("-");
+    setActiveCall({ roomId, friend, type, isIncoming: false });
   };
 
   if (!friend) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
@@ -95,6 +101,13 @@ const ChatArea = () => {
       {/* Chat Header */}
       <header className="glass" style={headerStyle}>
         <div style={userInfo}>
+          <button 
+            onClick={() => navigate("/dashboard/chat")} 
+            className="only-mobile" 
+            style={{ ...iconBtn, marginRight: '8px', border: 'none', background: 'none' }}
+          >
+            <ArrowLeft size={24} />
+          </button>
           <div style={avatarStyle}>{friend.username[0].toUpperCase()}</div>
           <div>
             <div style={userName}>{friend.username}</div>
@@ -112,7 +125,7 @@ const ChatArea = () => {
       <div style={messageList}>
         <AnimatePresence initial={false}>
           {messages.map((msg, idx) => {
-            const isMe = msg.sender._id === user.id;
+            const isMe = msg.sender._id === user._id;
             return (
               <motion.div
                 key={msg._id || idx}

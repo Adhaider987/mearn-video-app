@@ -12,7 +12,7 @@ export const SocketProvider = ({ children }) => {
 
   useEffect(() => {
     if (token) {
-      const newSocket = io("http://localhost:5000", {
+      const newSocket = io("http://172.16.200.191:5000", {
         auth: { token },
       });
 
