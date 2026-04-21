@@ -8,8 +8,9 @@ import {
   VideoOff, 
   PhoneOff, 
   Smile, 
-  Maximize2, 
-  Settings 
+  Settings,
+  Monitor,
+  MonitorOff
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useSocket } from "../context/SocketContext";
@@ -24,15 +25,19 @@ const ICE_SERVERS = {
 const VideoCallOverlay = ({ callData, onClose }) => {
   const { user } = useAuth();
   const socket = useSocket();
-  const { roomId, friend, type, isIncoming } = callData;
+  const { roomId, friend, type, isIncoming, status: initialStatus } = callData;
 
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({}); // userId -> stream
   const [peers, setPeers] = useState({}); // userId -> RTCPeerConnection
+  const [callStatus, setCallStatus] = useState(initialStatus || (isIncoming ? 'ringing' : 'connecting'));
+  const [remoteDeviceStatus, setRemoteDeviceStatus] = useState({}); // userId -> { videoOff: bool, audioMuted: bool }
   const pendingCandidates = useRef({}); // userId -> [candidates]
   
   const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(type === 'audio');
+  const [isVideoOff, setIsVideoOff] = useState(false); // We'll manage this via tracks
+  const [isSharingScreen, setIsSharingScreen] = useState(false);
+  const [screenStream, setScreenStream] = useState(null);
   const [reactions, setReactions] = useState([]); // List of active floating emojis
 
   const localVideoRef = useRef(null);
@@ -42,16 +47,20 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     const startMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: type === 'video',
+          video: true, 
           audio: true,
         });
+
+        if (type === 'audio' && !isIncoming) {
+          stream.getVideoTracks().forEach(t => t.enabled = false);
+          setIsVideoOff(true);
+        }
+
         setLocalStream(stream);
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
         
-        // Join the signaling room
         socket.emit("join-room", roomId);
 
-        // Notify the target user about the incoming call ONLY if we are the caller
         if (!isIncoming) {
           socket.emit("start-call", {
             targetUserId: friend._id,
@@ -61,7 +70,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         }
       } catch (err) {
         console.error("Error accessing media devices:", err);
-        alert("Could not access camera or microphone.");
+        alert("Could not access camera or microphone. Please check permissions.");
         onClose();
       }
     };
@@ -74,7 +83,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         localStream.getTracks().forEach(track => track.stop());
       }
     };
-  }, []);
+  }, [callStatus]); // Re-run when status changes from ringing to accepted
 
   const createPeerConnection = useCallback((targetUserId, targetSocketId, isOffer) => {
     const pc = new RTCPeerConnection(ICE_SERVERS);
@@ -155,7 +164,6 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     };
 
     const handlePeerJoined = async ({ socketId, userId: joinedUserId }) => {
-      console.log("Peer joined:", joinedUserId);
       const pc = createPeerConnection(joinedUserId, socketId, true);
       setPeers(prev => ({ ...prev, [joinedUserId]: pc }));
 
@@ -188,8 +196,14 @@ const VideoCallOverlay = ({ callData, onClose }) => {
       }, 4000);
     };
 
+    const handleDeviceStatus = ({ userId: peerId, status }) => {
+      setRemoteDeviceStatus(prev => ({
+        ...prev,
+        [peerId]: { ...prev[peerId], ...status }
+      }));
+    };
+
     const handleCallEnded = () => {
-      console.log("Call ended by peer");
       onClose();
     };
 
@@ -198,6 +212,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     socket.on("peer-left", handlePeerLeft);
     socket.on("reaction", handleReaction);
     socket.on("call-ended", handleCallEnded);
+    socket.on("device-status", handleDeviceStatus);
 
     return () => {
       socket.off("signal");
@@ -205,8 +220,9 @@ const VideoCallOverlay = ({ callData, onClose }) => {
       socket.off("peer-left");
       socket.off("reaction");
       socket.off("call-ended");
+      socket.off("device-status");
     };
-  }, [socket, localStream, peers, createPeerConnection, remoteStreams]);
+  }, [socket, localStream, peers, createPeerConnection, remoteStreams, callStatus]);
 
   const toggleMute = () => {
     if (localStream) {
@@ -214,6 +230,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         track.enabled = !track.enabled;
       });
       setIsMuted(!isMuted);
+      socket.emit("device-status", { roomId, status: { audioMuted: !isMuted } });
     }
   };
 
@@ -223,6 +240,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         track.enabled = !track.enabled;
       });
       setIsVideoOff(!isVideoOff);
+      socket.emit("device-status", { roomId, status: { videoOff: !isVideoOff } });
     }
   };
 
@@ -241,23 +259,118 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     onClose();
   };
 
+  const handleAccept = () => {
+    setCallStatus('connecting');
+    socket.emit("call-response", { callerId: friend._id, accept: true, roomId });
+  };
+
+  const handleDecline = () => {
+    socket.emit("call-response", { callerId: friend._id, accept: false, roomId });
+    onClose();
+  };
+
+  const startScreenShare = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const screenTrack = stream.getVideoTracks()[0];
+
+      // Replace track for all peers
+      Object.values(peers).forEach(pc => {
+        const sender = pc.getSenders().find(s => s.track.kind === 'video');
+        if (sender) sender.replaceTrack(screenTrack);
+      });
+
+      setScreenStream(stream);
+      setIsSharingScreen(true);
+      if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+
+      screenTrack.onended = () => stopScreenShare();
+      
+      socket.emit("device-status", { roomId, status: { sharingScreen: true } });
+    } catch (err) {
+      console.error("Screen share error:", err);
+    }
+  };
+
+  const stopScreenShare = () => {
+    if (screenStream) {
+      screenStream.getTracks().forEach(t => t.stop());
+    }
+    
+    // Switch back to camera
+    const cameraTrack = localStream.getVideoTracks()[0];
+    Object.values(peers).forEach(pc => {
+      const sender = pc.getSenders().find(s => s.track.kind === 'video');
+      if (sender) sender.replaceTrack(cameraTrack);
+    });
+
+    setScreenStream(null);
+    setIsSharingScreen(false);
+    if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
+    
+    socket.emit("device-status", { roomId, status: { sharingScreen: false } });
+  };
+
+  // Ringing View
+  if (callStatus === 'ringing') {
+    return (
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-premium-bg flex items-center justify-center z-[1000]"
+      >
+        <div className="flex flex-col items-center text-center">
+          <div className="relative w-[120px] h-[120px]">
+            <div className="w-full h-full rounded-[40px] bg-premium-accent flex items-center justify-center text-white text-[48px] font-bold relative z-[2] uppercase">
+              {friend.username[0]}
+            </div>
+            <div className="absolute inset-[-10px] rounded-[48px] border-4 border-premium-accent animate-pulse-custom z-[1]"></div>
+          </div>
+          <h2 className="text-white mt-6 text-2xl font-bold">{friend.username}</h2>
+          <p className="text-white/60">Incoming {type} call...</p>
+          
+          <div className="flex gap-8 mt-12">
+            <button 
+              onClick={handleDecline} 
+              className="w-[72px] h-[72px] rounded-3xl bg-red-500 flex items-center justify-center text-white shadow-xl"
+            >
+              <X size={32} />
+            </button>
+            <button 
+              onClick={handleAccept} 
+              className="w-[72px] h-[72px] rounded-3xl bg-green-500 flex items-center justify-center text-white shadow-xl"
+            >
+              {type === 'video' ? <Video size={32} /> : <Mic size={32} />}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  // Check if anyone (including self) is sharing screen
+  const remoteSharing = Object.values(remoteDeviceStatus).find(s => s.sharingScreen);
+  const spotlightUserId = Object.keys(remoteDeviceStatus).find(uid => remoteDeviceStatus[uid].sharingScreen);
+  const isAnySharing = isSharingScreen || !!remoteSharing;
+
   return (
     <motion.div 
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      style={overlayStyle}
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      className="fixed inset-0 bg-premium-bg flex flex-col z-[1000] overflow-hidden"
     >
       {/* Reactions Display */}
-      <div style={reactionOverlay}>
+      <div className="absolute inset-0 pointer-events-none z-[50] flex justify-center items-end">
         <AnimatePresence>
           {reactions.map(r => (
             <motion.div
               key={r.id}
-              initial={{ y: 0, opacity: 0, x: Math.random() * 100 - 50 }}
-              animate={{ y: -400, opacity: [0, 1, 1, 0] }}
+              initial={{ y: 0, opacity: 1, scale: 0.5 }}
+              animate={{ y: -400, opacity: 0, scale: 2 }}
               exit={{ opacity: 0 }}
-              style={floatingEmoji}
+              className="text-[48px] absolute"
             >
               {r.emoji}
             </motion.div>
@@ -265,59 +378,102 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         </AnimatePresence>
       </div>
 
-      <header style={callHeader}>
-        <div style={callInfo}>
-          <div style={pulse}></div>
-          <h3>{friend.username}</h3>
-          <span style={timeStyle}>00:00</span>
+      <header className="px-10 py-6 flex justify-between items-center z-10 bg-gradient-to-b from-black/80 to-transparent">
+        <div className="flex items-center gap-3">
+          <div className="glass px-4 py-2 rounded-xl text-sm border border-white/10">
+            {isAnySharing ? "📺 Presentation Mode" : "👥 Group Call"}
+          </div>
         </div>
-        <button onClick={handleHangUp} style={closeBtn}><X size={24} /></button>
+        <button onClick={handleHangUp} className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors">
+          <X size={24} />
+        </button>
       </header>
 
-      <div className="video-grid">
-        {/* Remote Videos */}
-        {Object.entries(remoteStreams).map(([userId, stream]) => (
-          <div key={userId} style={videoCard}>
-            <RemoteVideo stream={stream} />
-            <div style={labelStyle}>{friend.username}</div>
+      {isAnySharing ? (
+        <div className="flex-1 grid grid-cols-1 grid-rows-[1fr_auto] gap-4 p-6 overflow-hidden">
+          <div className="bg-black rounded-[32px] overflow-hidden relative shadow-premium border border-white/10">
+            {isSharingScreen ? (
+              <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+            ) : (
+              <RemoteVideo stream={remoteStreams[spotlightUserId]} />
+            )}
+            <div className="absolute bottom-4 left-4 bg-black/50 backdrop-blur-md px-3 py-1 rounded-lg text-xs">
+              {isSharingScreen ? "Your Screen" : `${friend.username}'s Screen`}
+            </div>
           </div>
-        ))}
-        
-        {/* Local Video */}
-        <div className="local-video-container">
-          <video 
-            ref={localVideoRef} 
-            autoPlay 
-            playsInline 
-            muted 
-            style={videoStyle} 
-          />
-          <div style={labelStyle}>You</div>
+          <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
+            {!isSharingScreen && (
+              <div className="w-[160px] aspect-[4/3] relative flex-shrink-0 rounded-2xl overflow-hidden shadow-lg border border-white/10 bg-premium-bg-alt">
+                <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                <div className="absolute bottom-2 left-2 bg-black/50 backdrop-blur-md px-2 py-0.5 rounded text-[10px]">You</div>
+              </div>
+            )}
+            {Object.entries(remoteStreams).filter(([uid]) => uid !== spotlightUserId).map(([peerId, stream]) => (
+              <div key={peerId} className="w-[160px] aspect-[4/3] relative flex-shrink-0 rounded-2xl overflow-hidden shadow-lg border border-white/10 bg-premium-bg-alt">
+                <RemoteVideo stream={stream} />
+                <div className="absolute bottom-2 left-2 bg-black/50 backdrop-blur-md px-2 py-0.5 rounded text-[10px]">{friend.username}</div>
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
-
-      <footer className="call-footer" style={callFooter}>
-        <div className="controls-row" style={controlsRow}>
-          <button onClick={toggleMute} style={isMuted ? controlBtnOff : controlBtn}>
-            {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
-          </button>
-          <button onClick={toggleVideo} style={isVideoOff ? controlBtnOff : controlBtn}>
-            {isVideoOff ? <VideoOff size={24} /> : <Video size={24} />}
-          </button>
+      ) : (
+        <div className="flex-1 p-5 grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-3 items-center justify-center overflow-y-auto">
+           {/* Remote Videos */}
+          {Object.entries(remoteStreams).map(([peerId, stream]) => (
+            <div key={peerId} className="relative w-full aspect-video rounded-[24px] overflow-hidden bg-[#16171d] border border-white/10">
+              {remoteDeviceStatus[peerId]?.videoOff ? (
+                <div className="w-full h-full flex flex-col items-center justify-center bg-[#1f2028] gap-3">
+                  <div className="w-16 h-16 rounded-[20px] bg-premium-accent flex items-center justify-center text-white text-2xl font-bold uppercase">
+                    {friend.username[0]}
+                  </div>
+                  <p className="text-sm">Camera Off</p>
+                </div>
+              ) : (
+                <RemoteVideo stream={stream} />
+              )}
+              <div className="absolute bottom-4 left-4 bg-black/50 backdrop-blur-md px-3 py-1 rounded-lg text-xs flex items-center">
+                {friend.username} {remoteDeviceStatus[peerId]?.audioMuted && <MicOff size={14} className="ml-1" />}
+              </div>
+            </div>
+          ))}
           
-          <div style={reactionRow}>
-            <button onClick={() => sendReaction('❤️')} style={reactionBtn}>❤️</button>
-            <button onClick={() => sendReaction('👍')} style={reactionBtn}>👍</button>
-            <button onClick={() => sendReaction('😂')} style={reactionBtn}>😂</button>
-            <button onClick={() => sendReaction('👏')} style={reactionBtn}>👏</button>
-            <button onClick={() => sendReaction('🔥')} style={reactionBtn}>🔥</button>
+          {/* Local Video */}
+          <div className="relative w-full aspect-video rounded-[24px] overflow-hidden bg-[#16171d] border border-white/10">
+            {isVideoOff ? (
+              <div className="w-full h-full flex flex-col items-center justify-center bg-[#1f2028] gap-3">
+                <div className="w-16 h-16 rounded-[20px] bg-premium-accent flex items-center justify-center text-white text-2xl font-bold uppercase">
+                  {user.username[0]}
+                </div>
+                <p className="text-sm">Camera Off</p>
+              </div>
+            ) : (
+              <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+            )}
+            <div className="absolute bottom-4 left-4 bg-black/50 backdrop-blur-md px-3 py-1 rounded-lg text-xs">You</div>
           </div>
-
-          <button onClick={handleHangUp} style={hangupBtn}>
-            <PhoneOff size={24} />
-          </button>
         </div>
-      </footer>
+      )}
+
+      {/* Premium Dock */}
+      <div className="premium-dock translate-y-0 !bottom-10 h-auto">
+        <button onClick={toggleMute} className={`dock-btn ${isMuted ? 'danger' : ''}`}>
+          {isMuted ? <MicOff size={22} /> : <Mic size={22} />}
+        </button>
+        <button onClick={toggleVideo} className={`dock-btn ${isVideoOff ? 'danger' : ''}`}>
+          {isVideoOff ? <VideoOff size={22} /> : <Video size={22} />}
+        </button>
+        <button onClick={isSharingScreen ? stopScreenShare : startScreenShare} className={`dock-btn ${isSharingScreen ? 'active' : ''}`}>
+          {isSharingScreen ? <MonitorOff size={22} /> : <Monitor size={22} />}
+        </button>
+        
+        <div className="w-[1px] h-6 bg-white/10 mx-2" />
+        
+        <button onClick={() => sendReaction("🚀")} className="dock-btn text-[22px]">🚀</button>
+        <button onClick={() => sendReaction("🔥")} className="dock-btn text-[22px]">🔥</button>
+        <button onClick={handleHangUp} className="w-[72px] h-[52px] rounded-[20px] bg-red-500 flex items-center justify-center text-white shadow-lg">
+          <PhoneOff size={22} />
+        </button>
+      </div>
     </motion.div>
   );
 };
@@ -328,182 +484,7 @@ const RemoteVideo = ({ stream }) => {
     if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
 
-  return <video ref={videoRef} autoPlay playsInline style={videoStyle} />;
-};
-
-// Styles
-const overlayStyle = {
-  position: "fixed",
-  inset: 0,
-  background: "#0a0a0b",
-  zIndex: 100,
-  display: "flex",
-  flexDirection: "column",
-  color: "#fff",
-};
-
-const callHeader = {
-  padding: "24px",
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  background: "linear-gradient(to bottom, rgba(0,0,0,0.8), transparent)",
-  zIndex: 10,
-};
-
-const callInfo = {
-  display: "flex",
-  alignItems: "center",
-  gap: "12px",
-};
-
-const pulse = {
-  width: "10px",
-  height: "10px",
-  background: "#ef4444",
-  borderRadius: "50%",
-  boxShadow: "0 0 10px #ef4444",
-  animation: "pulse 2s infinite",
-};
-
-const timeStyle = {
-  opacity: 0.6,
-  fontSize: "14px",
-};
-
-const closeBtn = {
-  background: "rgba(255,255,255,0.1)",
-  border: "none",
-  color: "#fff",
-  width: "48px",
-  height: "48px",
-  borderRadius: "50%",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const videoGrid = {
-  flex: 1,
-  padding: "20px",
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", // Reduced min-width
-  gap: "10px",
-  alignItems: "center",
-  justifyContent: "center",
-  overflowY: "auto",
-};
-
-const videoCard = {
-  position: "relative",
-  width: "100%",
-  height: "100%",
-  maxHeight: "400px", // Reduced
-  aspectRatio: "16/9",
-  borderRadius: "24px",
-  overflow: "hidden",
-  background: "#16171d",
-  border: "1px solid rgba(255,255,255,0.1)",
-};
-
-const localVideoCard = {
-  ...videoCard,
-  width: "min(160px, 30vw)",
-  height: "auto",
-  aspectRatio: "4/3",
-  position: "absolute",
-  bottom: "140px",
-  right: "20px",
-  zIndex: 20,
-  boxShadow: "0 20px 40px rgba(0,0,0,0.4)",
-};
-
-const videoStyle = {
-  width: "100%",
-  height: "100%",
-  objectFit: "cover",
-};
-
-const labelStyle = {
-  position: "absolute",
-  bottom: "16px",
-  left: "16px",
-  background: "rgba(0,0,0,0.5)",
-  padding: "4px 12px",
-  borderRadius: "8px",
-  fontSize: "12px",
-  backdropFilter: "blur(4px)",
-};
-
-const callFooter = {
-  padding: "40px",
-  background: "linear-gradient(to top, rgba(0,0,0,0.8), transparent)",
-  display: "flex",
-  justifyContent: "center",
-  zIndex: 10,
-};
-
-const controlsRow = {
-  display: "flex",
-  alignItems: "center",
-  gap: "20px",
-  background: "rgba(255,255,255,0.1)",
-  padding: "12px 24px",
-  borderRadius: "24px",
-  backdropFilter: "blur(20px)",
-  border: "1px solid rgba(255,255,255,0.1)",
-};
-
-const controlBtn = {
-  width: "56px",
-  height: "56px",
-  borderRadius: "18px",
-  border: "none",
-  background: "rgba(255,255,255,0.1)",
-  color: "#fff",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const controlBtnOff = {
-  ...controlBtn,
-  background: "#ef4444",
-};
-
-const hangupBtn = {
-  ...controlBtn,
-  background: "#ef4444",
-  width: "72px",
-};
-
-const reactionRow = {
-  display: "flex",
-  gap: "10px",
-  padding: "0 20px",
-  borderLeft: "1px solid rgba(255,255,255,0.1)",
-  borderRight: "1px solid rgba(255,255,255,0.1)",
-};
-
-const reactionBtn = {
-  fontSize: "24px",
-  background: "none",
-  border: "none",
-};
-
-const reactionOverlay = {
-  position: "absolute",
-  inset: 0,
-  pointerEvents: "none",
-  zIndex: 50,
-  display: "flex",
-  justifyContent: "center",
-  alignItems: "flex-end",
-};
-
-const floatingEmoji = {
-  fontSize: "48px",
-  position: "absolute",
+  return <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />;
 };
 
 export default VideoCallOverlay;

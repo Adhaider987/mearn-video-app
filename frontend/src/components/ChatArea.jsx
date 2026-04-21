@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Video, Phone, MoreVertical, Smile, Paperclip, ArrowLeft } from "lucide-react";
-import { useParams, useOutletContext } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useParams, useOutletContext, useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import apiInstance from "../api/apiInstance";
 import { useAuth } from "../context/AuthContext";
 import { useSocket } from "../context/SocketContext";
-import { toast } from "sonner";
 
 const ChatArea = () => {
   const { friendId } = useParams();
@@ -14,12 +13,13 @@ const ChatArea = () => {
   const socket = useSocket();
   const { setActiveCall } = useOutletContext();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const messagesEndRef = useRef(null);
 
-  // Fetch Friend Details (To get active friend info)
+  // Fetch Friend Details
   const { data: friends = [] } = useQuery({ 
     queryKey: ["friends"],
     queryFn: async () => {
@@ -30,7 +30,7 @@ const ChatArea = () => {
   const friend = friends.find(f => f._id?.toString() === friendId || f.id?.toString() === friendId);
 
   // Fetch Message History
-  const { data: history = [], isLoading: isHistoryLoading } = useQuery({
+  const { data: history = [] } = useQuery({
     queryKey: ["messages", friendId],
     queryFn: async () => {
       const res = await apiInstance.get(`/messages/${friendId}`);
@@ -40,28 +40,20 @@ const ChatArea = () => {
   });
 
   useEffect(() => {
-    if (history.length > 0) {
-      setMessages(history);
-    } else {
-      setMessages([]);
-    }
+    setMessages(history || []);
   }, [history]);
 
   useEffect(() => {
     if (socket) {
       const handleNewMessage = (msg) => {
-        // Compare with normalized _id
         const currentUserId = user._id;
         const isFromFriend = msg.sender._id === friendId && msg.receiver === currentUserId;
         const isFromMe = msg.sender._id === currentUserId && msg.receiver === friendId;
 
         if (isFromFriend || isFromMe) {
           setMessages(prev => {
-            // Prevent duplicates
             if (msg._id && prev.find(m => m._id === msg._id)) return prev;
-            const newMessages = [...prev, msg];
-            // Sort by timestamp to ensure correct order
-            return newMessages.sort((a, b) => new Date(a.createdAt || Date.now()) - new Date(b.createdAt || Date.now()));
+            return [...prev, msg].sort((a, b) => new Date(a.createdAt || Date.now()) - new Date(b.createdAt || Date.now()));
           });
         }
       };
@@ -78,13 +70,7 @@ const ChatArea = () => {
   const sendMessage = (e) => {
     e.preventDefault();
     if (!inputText.trim()) return;
-
-    const messageData = {
-      receiverId: friendId,
-      content: inputText,
-    };
-
-    socket.emit("send-message", messageData);
+    socket.emit("send-message", { receiverId: friendId, content: inputText });
     setInputText("");
   };
 
@@ -94,35 +80,44 @@ const ChatArea = () => {
     setActiveCall({ roomId, friend, type, isIncoming: false });
   };
 
-  if (!friend) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
+  if (!friend) return <div className="flex-1 flex items-center justify-center text-premium-text">Selecting a chat...</div>;
 
   return (
-    <div style={chatContainer}>
+    <div className="flex flex-col h-full bg-premium-bg-alt">
       {/* Chat Header */}
-      <header className="glass" style={headerStyle}>
-        <div style={userInfo}>
+      <header className="glass px-6 py-4 flex items-center justify-between border-b border-white/5 z-[5]">
+        <div className="flex items-center gap-3">
           <button 
             onClick={() => navigate("/dashboard/chat")} 
-            className="only-mobile" 
-            style={{ ...iconBtn, marginRight: '8px', border: 'none', background: 'none' }}
+            className="md:hidden p-2 hover:bg-white/5 rounded-full transition-colors mr-2"
           >
             <ArrowLeft size={24} />
           </button>
-          <div style={avatarStyle}>{friend.username[0].toUpperCase()}</div>
+          <div className="w-11 h-11 rounded-2xl bg-premium-accent/10 text-premium-accent flex items-center justify-center font-bold text-lg uppercase border border-premium-accent/20">
+            {friend.username[0]}
+          </div>
           <div>
-            <div style={userName}>{friend.username}</div>
-            <div style={statusText}>{friend.online ? 'Active Now' : 'Offline'}</div>
+            <div className="font-bold text-base text-premium-text-h">{friend.username}</div>
+            <div className={`text-xs font-medium ${friend.online ? 'text-green-500' : 'text-premium-text opacity-60'}`}>
+              {friend.online ? 'Active Now' : 'Offline'}
+            </div>
           </div>
         </div>
-        <div style={headerActions}>
-          <button onClick={() => onStartCall('audio')} style={iconBtn}><Phone size={20} /></button>
-          <button onClick={() => onStartCall('video')} style={iconBtnActive}><Video size={20} /></button>
-          <button style={iconBtn}><MoreVertical size={20} /></button>
+        <div className="flex gap-3">
+          <button onClick={() => onStartCall('audio')} className="w-10 h-10 rounded-xl flex items-center justify-center bg-white/5 border border-white/10 text-premium-text hover:bg-white/15 transition-all">
+            <Phone size={20} />
+          </button>
+          <button onClick={() => onStartCall('video')} className="w-10 h-10 rounded-xl flex items-center justify-center bg-premium-accent text-white shadow-lg shadow-premium-accent/20 hover:scale-105 active:scale-95 transition-all">
+            <Video size={20} />
+          </button>
+          <button className="w-10 h-10 rounded-xl flex items-center justify-center bg-white/5 border border-white/10 text-premium-text">
+            <MoreVertical size={20} />
+          </button>
         </div>
       </header>
 
       {/* Messages Area */}
-      <div style={messageList}>
+      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 no-scrollbar">
         <AnimatePresence initial={false}>
           {messages.map((msg, idx) => {
             const isMe = msg.sender._id === user._id;
@@ -131,21 +126,20 @@ const ChatArea = () => {
                 key={msg._id || idx}
                 initial={{ opacity: 0, y: 10, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                style={{
-                  ...messageWrap,
-                  justifyContent: isMe ? "flex-end" : "flex-start",
-                }}
+                className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}
               >
-                {!isMe && <div style={smallAvatar}>{friend.username[0].toUpperCase()}</div>}
-                <div style={{
-                  ...bubbleStyle,
-                  background: isMe ? "var(--accent)" : "var(--bg)",
-                  color: isMe ? "#fff" : "var(--text-h)",
-                  borderRadius: isMe ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
-                  boxShadow: isMe ? "0 4px 12px rgba(170, 59, 255, 0.2)" : "0 2px 8px rgba(0,0,0,0.05)",
-                }}>
+                {!isMe && (
+                  <div className="w-7 h-7 rounded-lg bg-premium-accent/20 text-premium-accent text-[10px] flex items-center justify-center font-bold uppercase transition-transform hover:scale-110 cursor-pointer">
+                    {friend.username[0]}
+                  </div>
+                )}
+                <div className={`max-w-[70%] p-4 text-sm leading-6 relative ${
+                  isMe 
+                    ? 'bg-premium-accent text-white rounded-[18px_18px_4px_18px] shadow-lg shadow-premium-accent/20' 
+                    : 'bg-white/5 text-premium-text-h rounded-[18px_18px_18px_4px] border border-white/5 shadow-sm'
+                }`}>
                   {msg.content}
-                  <div style={{...timeStyle, color: isMe ? "rgba(255,255,255,0.7)" : "var(--text)"}}>
+                  <div className={`text-[10px] mt-1 text-right opacity-60`}>
                     {new Date(msg.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>
                 </div>
@@ -157,187 +151,24 @@ const ChatArea = () => {
       </div>
 
       {/* Input Area */}
-      <footer style={inputSection}>
-        <form onSubmit={sendMessage} style={inputForm}>
-          <button type="button" style={toolBtn}><Paperclip size={20} /></button>
-          <button type="button" style={toolBtn}><Smile size={20} /></button>
+      <footer className="p-6 bg-premium-bg border-t border-white/5">
+        <form onSubmit={sendMessage} className="flex items-center gap-3 bg-premium-bg-alt p-2 rounded-2xl border border-white/10 shadow-inner">
+          <button type="button" className="p-2 text-premium-text opacity-40 hover:opacity-100 transition-opacity"><Paperclip size={20} /></button>
+          <button type="button" className="p-2 text-premium-text opacity-40 hover:opacity-100 transition-opacity"><Smile size={20} /></button>
           <input 
             type="text" 
             placeholder="Type a message..." 
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            style={chatInput}
+            className="flex-1 bg-transparent border-none text-sm text-premium-text-h outline-none placeholder:text-premium-text/30"
           />
-          <button type="submit" style={sendBtn}>
+          <button type="submit" className="w-11 h-11 rounded-xl bg-premium-accent text-white flex items-center justify-center shadow-lg shadow-premium-accent/30 hover:scale-105 active:scale-95 transition-all">
             <Send size={20} />
           </button>
         </form>
       </footer>
     </div>
   );
-};
-
-// Styles
-const chatContainer = {
-  display: "flex",
-  flexDirection: "column",
-  height: "100%",
-  background: "var(--code-bg)",
-};
-
-const headerStyle = {
-  padding: "16px 24px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  borderBottom: "1px solid var(--border)",
-  zIndex: 5,
-};
-
-const userInfo = {
-  display: "flex",
-  alignItems: "center",
-  gap: "12px",
-};
-
-const avatarStyle = {
-  width: "44px",
-  height: "44px",
-  borderRadius: "14px",
-  background: "var(--accent-bg)",
-  color: "var(--accent)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontWeight: "bold",
-  fontSize: "18px",
-};
-
-const userName = {
-  fontWeight: "700",
-  fontSize: "16px",
-};
-
-const statusText = {
-  fontSize: "13px",
-  color: "#22c55e",
-  fontWeight: "500",
-};
-
-const headerActions = {
-  display: "flex",
-  gap: "12px",
-};
-
-const iconBtn = {
-  width: "40px",
-  height: "40px",
-  borderRadius: "10px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "var(--bg)",
-  border: "1px solid var(--border)",
-  color: "var(--text)",
-  cursor: "pointer",
-};
-
-const iconBtnActive = {
-  ...iconBtn,
-  background: "var(--accent)",
-  color: "#fff",
-  border: "none",
-};
-
-const messageList = {
-  flex: 1,
-  overflowY: "auto",
-  padding: "24px",
-  display: "flex",
-  flexDirection: "column",
-  gap: "16px",
-};
-
-const messageWrap = {
-  display: "flex",
-  alignItems: "flex-end",
-  gap: "8px",
-};
-
-const smallAvatar = {
-  width: "28px",
-  height: "28px",
-  borderRadius: "8px",
-  background: "var(--border)",
-  fontSize: "10px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontWeight: "bold",
-};
-
-const bubbleStyle = {
-  maxWidth: "70%",
-  padding: "12px 16px",
-  fontSize: "15px",
-  lineHeight: "1.5",
-  position: "relative",
-};
-
-const timeStyle = {
-  fontSize: "10px",
-  marginTop: "4px",
-  textAlign: "right",
-};
-
-const inputSection = {
-  padding: "24px",
-  background: "var(--bg)",
-  borderTop: "1px solid var(--border)",
-};
-
-const inputForm = {
-  display: "flex",
-  alignItems: "center",
-  gap: "12px",
-  background: "var(--code-bg)",
-  padding: "8px",
-  borderRadius: "16px",
-  border: "1px solid var(--border)",
-};
-
-const chatInput = {
-  flex: 1,
-  background: "none",
-  border: "none",
-  padding: "10px",
-  fontSize: "15px",
-  color: "var(--text-h)",
-  outline: "none",
-};
-
-const toolBtn = {
-  background: "none",
-  border: "none",
-  color: "var(--text)",
-  opacity: 0.5,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "8px",
-};
-
-const sendBtn = {
-  width: "44px",
-  height: "44px",
-  borderRadius: "12px",
-  background: "var(--accent)",
-  color: "#fff",
-  border: "none",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  boxShadow: "0 4px 10px rgba(170, 59, 255, 0.3)",
 };
 
 export default ChatArea;

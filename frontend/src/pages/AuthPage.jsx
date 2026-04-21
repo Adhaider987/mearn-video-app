@@ -2,10 +2,20 @@ import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
-import { LogIn, UserPlus, Mail, Lock, User, ArrowRight } from "lucide-react";
+import { 
+  LogIn, 
+  UserPlus, 
+  Mail, 
+  Lock, 
+  User, 
+  ArrowRight, 
+  Eye, 
+  EyeOff 
+} from "lucide-react";
 
 const AuthPage = () => {
   const [isLogin, setIsLogin] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
@@ -34,34 +44,34 @@ const AuthPage = () => {
   };
 
   return (
-    <div className="auth-container" style={containerStyle}>
-      <div className="auth-bg-blobs" style={blobStyle}>
-        <div style={{...blob, top: '-10%', left: '-10%', background: 'var(--accent)', opacity: 0.2}}></div>
-        <div style={{...blob, bottom: '-10%', right: '-10%', background: '#3b82f6', opacity: 0.15}}></div>
+    <div className="min-h-screen flex items-center justify-center relative p-5 overflow-hidden bg-premium-bg">
+      {/* Background Blobs */}
+      <div className="absolute inset-0 z-0">
+        <div className="absolute w-[600px] h-[600px] rounded-full blur-[80px] -top-[10%] -left-[10%] bg-premium-accent opacity-20"></div>
+        <div className="absolute w-[600px] h-[600px] rounded-full blur-[80px] -bottom-[10%] -right-[10%] bg-blue-500 opacity-15"></div>
       </div>
 
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="glass auth-card"
-        style={cardStyle}
+        className="glass w-full max-w-[440px] p-10 rounded-3xl relative z-10"
       >
-        <div style={headerStyle}>
-          <div style={logoWrapper}>
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-premium-accent/10 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-premium-accent/20">
             <AnimatePresence mode="wait">
               {isLogin ? (
                 <motion.div key="login-icon" initial={{ scale: 0.5, rotate: -45 }} animate={{ scale: 1, rotate: 0 }} exit={{ scale: 0.5, rotate: 45 }}>
-                  <LogIn size={32} color="var(--accent)" />
+                  <LogIn size={32} className="text-premium-accent" />
                 </motion.div>
               ) : (
                 <motion.div key="signup-icon" initial={{ scale: 0.5, rotate: 45 }} animate={{ scale: 1, rotate: 0 }} exit={{ scale: 0.5, rotate: -45 }}>
-                  <UserPlus size={32} color="var(--accent)" />
+                  <UserPlus size={32} className="text-premium-accent" />
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
-          <h1>{isLogin ? "Welcome Back" : "Create Account"}</h1>
-          <p style={{ color: "var(--text)", opacity: 0.8 }}>
+          <h1 className="text-3xl font-bold text-premium-text-h mb-2">{isLogin ? "Welcome Back" : "Create Account"}</h1>
+          <p className="text-premium-text opacity-80">
             {isLogin ? "Sign in to connect with friends" : "Join the premium video call experience"}
           </p>
         </div>
@@ -70,64 +80,71 @@ const AuthPage = () => {
           <motion.div 
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
-            style={errorStyle}
+            className="bg-red-500/10 text-red-500 p-3 rounded-xl text-sm mb-5 text-center border border-red-500/20"
           >
             {error}
           </motion.div>
         )}
 
-        <form onSubmit={handleSubmit} style={formStyle}>
+        <form onSubmit={handleSubmit} className="flex flex-direction flex-col gap-4">
           {!isLogin && (
-            <div style={inputWrapper}>
-              <User size={18} style={iconStyle} />
+            <div className="relative flex items-center">
+              <User size={18} className="absolute left-3.5 text-premium-text opacity-50 transition-opacity" />
               <input 
                 type="text" 
                 placeholder="Username" 
                 required 
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                style={inputStyle}
+                className="w-full py-3.5 pl-11 pr-3.5 bg-white/5 border border-white/10 rounded-xl text-base text-premium-text-h focus:outline-none focus:border-premium-accent focus:ring-1 focus:ring-premium-accent transition-all"
               />
             </div>
           )}
-          <div style={inputWrapper}>
-            <Mail size={18} style={iconStyle} />
+          <div className="relative flex items-center">
+            <Mail size={18} className="absolute left-3.5 text-premium-text opacity-50 group-focus-within:opacity-100 transition-opacity" />
             <input 
               type="email" 
               placeholder="Email Address" 
               required 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              style={inputStyle}
+              className="w-full py-3.5 pl-11 pr-3.5 bg-white/5 border border-white/10 rounded-xl text-base text-premium-text-h focus:outline-none focus:border-premium-accent focus:ring-1 focus:ring-premium-accent transition-all"
             />
           </div>
-          <div style={inputWrapper}>
-            <Lock size={18} style={iconStyle} />
+          <div className="relative flex items-center">
+            <Lock size={18} className="absolute left-3.5 text-premium-text opacity-50 transition-opacity" />
             <input 
-              type="password" 
+              type={showPassword ? "text" : "password"} 
               placeholder="Password" 
               required 
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              style={inputStyle}
+              className="w-full py-3.5 pl-11 pr-11 bg-white/5 border border-white/10 rounded-xl text-base text-premium-text-h focus:outline-none focus:border-premium-accent focus:ring-1 focus:ring-premium-accent transition-all"
             />
+            <button 
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3.5 text-premium-text opacity-50 hover:opacity-100 transition-opacity"
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
           </div>
 
           <button 
             type="submit" 
             disabled={isLoading}
-            style={buttonStyle}
+            className="w-full py-3.5 bg-premium-accent text-white rounded-xl text-base font-semibold mt-2 flex items-center justify-center shadow-lg shadow-premium-accent/20 enabled:hover:scale-[1.02] active:enabled:scale-[0.98] transition-all disabled:opacity-50"
           >
             {isLoading ? "Processing..." : (isLogin ? "Sign In" : "Sign Up")}
-            {!isLoading && <ArrowRight size={18} style={{ marginLeft: 8 }} />}
+            {!isLoading && <ArrowRight size={18} className="ml-2" />}
           </button>
         </form>
 
-        <div style={footerStyle}>
+        <div className="mt-6 text-center text-sm text-premium-text">
           {isLogin ? "Don't have an account?" : "Already have an account?"}{" "}
           <button 
             onClick={() => setIsLogin(!isLogin)} 
-            style={toggleButtonStyle}
+            className="text-premium-accent font-semibold ml-1 hover:underline"
           >
             {isLogin ? "Sign Up" : "Sign In"}
           </button>
@@ -135,131 +152,6 @@ const AuthPage = () => {
       </motion.div>
     </div>
   );
-};
-
-// Styles
-const containerStyle = {
-  minHeight: "100vh",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  position: "relative",
-  padding: "20px",
-  overflow: "hidden",
-  background: "var(--bg)",
-};
-
-const blobStyle = {
-  position: "absolute",
-  inset: 0,
-  zIndex: 0,
-};
-
-const blob = {
-  position: "absolute",
-  width: "600px",
-  height: "600px",
-  borderRadius: "50%",
-  filter: "blur(80px)",
-};
-
-const cardStyle = {
-  width: "100%",
-  maxWidth: "440px",
-  padding: "40px",
-  borderRadius: "24px",
-  position: "relative",
-  zIndex: 1,
-};
-
-const headerStyle = {
-  textAlign: "center",
-  marginBottom: "32px",
-};
-
-const logoWrapper = {
-  width: "64px",
-  height: "64px",
-  background: "var(--accent-bg)",
-  borderRadius: "16px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  margin: "0 auto 16px",
-  border: "1px solid var(--accent-border)",
-};
-
-const formStyle = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "16px",
-};
-
-const inputWrapper = {
-  position: "relative",
-  display: "flex",
-  alignItems: "center",
-};
-
-const iconStyle = {
-  position: "absolute",
-  left: "14px",
-  color: "var(--text)",
-  opacity: 0.5,
-};
-
-const inputStyle = {
-  width: "100%",
-  padding: "14px 14px 14px 44px",
-  background: "var(--social-bg)",
-  border: "1px solid var(--border)",
-  borderRadius: "12px",
-  fontSize: "16px",
-  color: "var(--text-h)",
-  boxSizing: "border-box",
-};
-
-const buttonStyle = {
-  background: "var(--accent)",
-  color: "#fff",
-  border: "none",
-  padding: "14px",
-  borderRadius: "12px",
-  fontSize: "16px",
-  fontWeight: "600",
-  marginTop: "8px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  boxShadow: "0 4px 12px rgba(170, 59, 255, 0.3)",
-};
-
-const errorStyle = {
-  background: "rgba(239, 68, 68, 0.1)",
-  color: "#ef4444",
-  padding: "12px",
-  borderRadius: "10px",
-  fontSize: "14px",
-  marginBottom: "20px",
-  textAlign: "center",
-  border: "1px solid rgba(239, 68, 68, 0.2)",
-};
-
-const footerStyle = {
-  marginTop: "24px",
-  textAlign: "center",
-  fontSize: "14px",
-  color: "var(--text)",
-};
-
-const toggleButtonStyle = {
-  background: "none",
-  border: "none",
-  color: "var(--accent)",
-  fontWeight: "600",
-  fontSize: "14px",
-  padding: "0",
-  marginLeft: "4px",
 };
 
 export default AuthPage;

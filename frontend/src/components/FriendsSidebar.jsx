@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { motion } from "framer-motion";
-import { Search, UserPlus, Check, X, User } from "lucide-react";
+import { Search, UserPlus, Check, X } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import apiInstance from "../api/apiInstance";
@@ -8,7 +8,6 @@ import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 
 const FriendsSidebar = () => {
-  const { token } = useAuth();
   const navigate = useNavigate();
   const { friendId } = useParams();
   const queryClient = useQueryClient();
@@ -67,240 +66,114 @@ const FriendsSidebar = () => {
   };
 
   return (
-    <div style={sidebarStyle}>
-      <div style={headerStyle}>
-        <h2>Messages</h2>
-        <div style={searchWrapper}>
-          <Search size={18} style={searchIcon} />
+    <div className="flex-1 min-w-0 border-r border-white/5 flex flex-col bg-premium-bg">
+      <div className="p-6 border-b border-white/5">
+        <h2 className="text-lg font-bold text-premium-text-h">Messages</h2>
+        <div className="relative mt-4 group">
+          <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-premium-text opacity-40 group-focus-within:opacity-100 transition-opacity" />
           <input 
             type="text" 
             placeholder="Search friends..." 
             value={searchQuery}
             onChange={handleSearch}
-            style={searchInput}
+            className="w-full py-2.5 pl-11 pr-4 rounded-xl border border-white/5 bg-white/5 text-sm text-premium-text-h focus:outline-none focus:border-premium-accent focus:ring-1 focus:ring-premium-accent transition-all"
           />
         </div>
       </div>
 
-      <div style={scrollArea}>
+      <div className="flex-1 overflow-y-auto p-3 space-y-5 no-scrollbar">
         {/* Search Results */}
         {searchQuery.length >= 2 && (
-          <div style={sectionStyle}>
-            <h3 style={sectionHeader}>Search Results</h3>
-            {searchResults.length === 0 && !isSearching && <p style={emptyText}>No users found</p>}
-            {searchResults.map(user => (
-              <div key={user._id} style={userItem}>
-                <div style={avatarStyle}>{user.username[0].toUpperCase()}</div>
-                <div style={userInfo}>
-                  <div style={userName}>{user.username}</div>
+          <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+            <h3 className="text-[11px] uppercase tracking-wider text-premium-text opacity-50 mb-3 ml-3 font-semibold">Search Results</h3>
+            {searchResults.length === 0 && !isSearching && <p className="text-xs text-center text-premium-text py-4 opacity-70">No users found</p>}
+            <div className="space-y-1">
+              {searchResults.map(user => (
+                <div key={user._id} className="flex items-center gap-3 p-3 rounded-2xl hover:bg-white/5 transition-colors group">
+                  <div className="w-10 h-10 rounded-xl bg-premium-accent/10 border border-premium-accent/20 flex items-center justify-center text-premium-accent font-bold uppercase">
+                    {user.username[0]}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate text-premium-text-h">{user.username}</div>
+                  </div>
+                  <button 
+                    onClick={() => sendRequestMutation.mutate(user._id)} 
+                    className="p-2 bg-premium-accent text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:scale-110 active:scale-95 shadow-md shadow-premium-accent/20"
+                  >
+                    <UserPlus size={18} />
+                  </button>
                 </div>
-                <button onClick={() => sendRequestMutation.mutate(user._id)} style={actionBtn}>
-                  <UserPlus size={18} />
-                </button>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
 
         {/* Pending Requests */}
         {pendingRequests.length > 0 && (
-          <div style={sectionStyle}>
-            <h3 style={sectionHeader}>Pending Requests</h3>
-            {pendingRequests.map(user => (
-              <div key={user._id} style={userItem}>
-                <div style={avatarStyle}>{user.username[0].toUpperCase()}</div>
-                <div style={userInfo}>
-                  <div style={userName}>{user.username}</div>
+          <div>
+            <h3 className="text-[11px] uppercase tracking-wider text-premium-text opacity-50 mb-3 ml-3 font-semibold">Pending Requests</h3>
+            <div className="space-y-1">
+              {pendingRequests.map(user => (
+                <div key={user._id} className="flex items-center gap-3 p-3 rounded-2xl bg-premium-accent/[0.03] border border-premium-accent/5">
+                  <div className="w-10 h-10 rounded-xl bg-premium-accent/10 border border-premium-accent/20 flex items-center justify-center text-premium-accent font-bold uppercase">
+                    {user.username[0]}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate text-premium-text-h">{user.username}</div>
+                  </div>
+                  <div className="flex gap-1.5 font-sans">
+                    <button onClick={() => respondMutation.mutate({ fromUserId: user._id, accept: true })} className="p-2 bg-green-500 text-white rounded-lg hover:scale-110 transition-transform"><Check size={16} /></button>
+                    <button onClick={() => respondMutation.mutate({ fromUserId: user._id, accept: false })} className="p-2 bg-red-500 text-white rounded-lg hover:scale-110 transition-transform"><X size={16} /></button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  <button onClick={() => respondMutation.mutate({ fromUserId: user._id, accept: true })} style={acceptBtn}><Check size={16} /></button>
-                  <button onClick={() => respondMutation.mutate({ fromUserId: user._id, accept: false })} style={rejectBtn}><X size={16} /></button>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
 
         {/* Friends List */}
-        <div style={sectionStyle}>
-          <h3 style={sectionHeader}>Active Friends</h3>
-          {friends.length === 0 && <p style={emptyText}>No friends yet. Try searching for users!</p>}
-          {friends.map(friend => (
-            <motion.div 
-              whileHover={{ x: 4 }}
-              key={friend._id} 
-              onClick={() => navigate(`/dashboard/chat/${friend._id}`)}
-              style={friend._id === friendId ? friendItemActive : friendItem}
-            >
-              <div style={avatarWrapper}>
-                <div style={avatarStyle}>{friend.username[0].toUpperCase()}</div>
-                {friend.online && <div style={onlineStatus}></div>}
-              </div>
-              <div style={userInfo}>
-                <div style={userName}>{friend.username}</div>
-                <div style={userSub}>{friend.online ? 'Online' : 'Offline'}</div>
-              </div>
-            </motion.div>
-          ))}
+        <div>
+          <h3 className="text-[11px] uppercase tracking-wider text-premium-text opacity-50 mb-3 ml-3 font-semibold">Conversations</h3>
+          {friends.length === 0 && (
+            <div className="p-6 text-center">
+              <p className="text-xs text-premium-text leading-relaxed opacity-60">No friends yet.<br/>Try searching for users to start chatting!</p>
+            </div>
+          )}
+          <div className="space-y-1 font-sans">
+            {friends.map(friend => (
+              <motion.div 
+                whileHover={{ x: 4 }}
+                key={friend._id} 
+                onClick={() => navigate(`/dashboard/chat/${friend._id}`)}
+                className={`flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all duration-200 group ${
+                  friend._id === friendId 
+                    ? "bg-premium-accent/10 border border-premium-accent/20" 
+                    : "hover:bg-white/5 border border-transparent"
+                }`}
+              >
+                <div className="relative">
+                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-base transition-all uppercase ${
+                    friend._id === friendId ? "bg-premium-accent text-white" : "bg-premium-accent/10 text-premium-accent border border-premium-accent/20"
+                  }`}>
+                    {friend.username[0]}
+                  </div>
+                  {friend.online && <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-premium-bg"></div>}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className={`font-bold text-sm truncate transition-colors ${friend._id === friendId ? "text-premium-accent" : "text-premium-text-h group-hover:text-premium-accent"}`}>
+                    {friend.username}
+                  </div>
+                  <div className="text-[11px] opacity-50 truncate">
+                    {friend.online ? 'Online now' : 'Offline'}
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
   );
-};
-
-// Styles
-const sidebarStyle = {
-  flex: 1,
-  minWidth: 0,
-  borderRight: "1px solid var(--border)",
-  display: "flex",
-  flexDirection: "column",
-  background: "var(--bg)",
-};
-
-const headerStyle = {
-  padding: "24px",
-  borderBottom: "1px solid var(--border)",
-};
-
-const searchWrapper = {
-  position: "relative",
-  marginTop: "16px",
-};
-
-const searchIcon = {
-  position: "absolute",
-  left: "12px",
-  top: "50%",
-  transform: "translateY(-50%)",
-  opacity: 0.5,
-};
-
-const searchInput = {
-  width: "100%",
-  padding: "10px 10px 10px 38px",
-  borderRadius: "10px",
-  border: "1px solid var(--border)",
-  background: "var(--social-bg)",
-  fontSize: "14px",
-  color: "var(--text-h)",
-  boxSizing: "border-box",
-};
-
-const scrollArea = {
-  flex: 1,
-  overflowY: "auto",
-  padding: "12px",
-};
-
-const sectionStyle = {
-  marginBottom: "20px",
-};
-
-const sectionHeader = {
-  fontSize: "12px",
-  textTransform: "uppercase",
-  letterSpacing: "0.5px",
-  color: "var(--text)",
-  opacity: 0.6,
-  marginBottom: "12px",
-  marginLeft: "12px",
-};
-
-const userItem = {
-  display: "flex",
-  alignItems: "center",
-  padding: "10px 12px",
-  borderRadius: "12px",
-  marginBottom: "4px",
-  gap: "12px",
-};
-
-const friendItem = {
-  ...userItem,
-  cursor: "pointer",
-  transition: "all 0.2s ease",
-};
-
-const friendItemActive = {
-  ...friendItem,
-  background: "var(--accent-bg)",
-  color: "var(--accent)",
-};
-
-const avatarWrapper = {
-  position: "relative",
-};
-
-const avatarStyle = {
-  width: "40px",
-  height: "40px",
-  borderRadius: "12px",
-  background: "var(--accent-bg)",
-  color: "var(--accent)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontWeight: "bold",
-  fontSize: "16px",
-};
-
-const onlineStatus = {
-  position: "absolute",
-  bottom: "-2px",
-  right: "-2px",
-  width: "12px",
-  height: "12px",
-  borderRadius: "50%",
-  background: "#22c55e",
-  border: "2px solid var(--bg)",
-};
-
-const userInfo = {
-  flex: 1,
-  minWidth: 0,
-};
-
-const userName = {
-  fontWeight: "600",
-  fontSize: "14px",
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-};
-
-const userSub = {
-  fontSize: "12px",
-  opacity: 0.6,
-};
-
-const actionBtn = {
-  background: "var(--accent)",
-  color: "#fff",
-  border: "none",
-  borderRadius: "8px",
-  padding: "6px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const acceptBtn = {
-  ...actionBtn,
-  background: "#22c55e",
-};
-
-const rejectBtn = {
-  ...actionBtn,
-  background: "#ef4444",
-};
-
-const emptyText = {
-  fontSize: "13px",
-  color: "var(--text)",
-  textAlign: "center",
-  marginTop: "10px",
-  opacity: 0.7,
 };
 
 export default FriendsSidebar;

@@ -205,6 +205,10 @@ io.on("connection", async (socket) => {
   socket.on("hang-up", ({ roomId }) => {
     socket.to(roomId).emit("call-ended");
   });
+
+  socket.on("device-status", ({ roomId, status }) => {
+    socket.to(roomId).emit("device-status", { userId, status });
+  });
 });
 
 const PORT = process.env.PORT || 5000;
