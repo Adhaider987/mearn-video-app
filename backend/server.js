@@ -11,6 +11,7 @@ const authRoutes = require("./routes/auth");
 const friendRoutes = require("./routes/friends");
 const User = require("./models/User");
 const Message = require("./models/Message");
+const messageRoutes = require("./routes/messages");
 
 function parseClientOrigins() {
   const raw =
@@ -43,6 +44,8 @@ app.use(
   }),
 );
 app.use(express.json());
+app.set("io", io);
+app.set("getSocketIdsByUserId", getSocketIdsByUserId);
 
 // DB Connection
 mongoose
@@ -53,6 +56,7 @@ mongoose
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/friends", friendRoutes);
+app.use("/api/messages", messageRoutes);
 
 app.get("/", (req, res) => {
   res.type("text").send("Video call backend is running.");
@@ -64,6 +68,8 @@ const userSockets = new Map(); // userId -> Set(socketIds)
 function getSocketIdsByUserId(userId) {
   return userSockets.get(userId.toString()) || new Set();
 }
+
+module.exports = { app, server, io, getSocketIdsByUserId };
 
 io.on("connection", async (socket) => {
   const token = socket.handshake.auth.token;
@@ -172,6 +178,28 @@ io.on("connection", async (socket) => {
       }
     }
     console.log("Socket disconnected:", socket.id);
+  });
+
+  // Call Signaling
+  socket.on("start-call", async (data) => {
+    const { targetUserId, type, roomId } = data;
+    if (!userId) return;
+
+    const sender = await User.findById(userId).select("username avatar online");
+    const targetSockets = getSocketIdsByUserId(targetUserId);
+    
+    targetSockets.forEach(sid => {
+      io.to(sid).emit("incoming-call", { sender, type, roomId });
+    });
+  });
+
+  socket.on("call-response", (data) => {
+    const { callerId, accept, roomId } = data;
+    const callerSockets = getSocketIdsByUserId(callerId);
+    
+    callerSockets.forEach(sid => {
+      io.to(sid).emit("call-response", { accept, roomId, responderId: userId });
+    });
   });
 });
 

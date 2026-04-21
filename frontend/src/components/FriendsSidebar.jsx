@@ -1,56 +1,69 @@
 import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { Search, UserPlus, Check, X, User } from "lucide-react";
-import axios from "axios";
+import { useNavigate, useParams } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import apiInstance from "../api/apiInstance";
 import { useAuth } from "../context/AuthContext";
+import { toast } from "sonner";
 
-const FriendsSidebar = ({ friends, pendingRequests, onSelectFriend, selectedFriend, onRefresh }) => {
+const FriendsSidebar = () => {
   const { token } = useAuth();
+  const navigate = useNavigate();
+  const { friendId } = useParams();
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState([]);
-  const [isSearching, setIsSearching] = useState(false);
 
-  const handleSearch = async (e) => {
+  // Fetch Friends List
+  const { data: friends = [] } = useQuery({
+    queryKey: ["friends"],
+    queryFn: async () => {
+      const res = await apiInstance.get("/friends/list");
+      return res.data;
+    },
+  });
+
+  // Fetch Pending Requests
+  const { data: pendingRequests = [] } = useQuery({
+    queryKey: ["pendingRequests"],
+    queryFn: async () => {
+      const res = await apiInstance.get("/friends/pending");
+      return res.data;
+    },
+  });
+
+  // Search Mutation
+  const { data: searchResults = [], mutate: searchUsers, isPending: isSearching } = useMutation({
+    mutationFn: async (q) => {
+      const res = await apiInstance.get(`/friends/search?q=${q}`);
+      return res.data;
+    },
+  });
+
+  // Friend Request Mutation
+  const sendRequestMutation = useMutation({
+    mutationFn: (userId) => apiInstance.post("/friends/request", { targetUserId: userId }),
+    onSuccess: () => {
+      toast.success("Friend request sent!");
+      queryClient.invalidateQueries({ queryKey: ["friends"] });
+    },
+    onError: (err) => toast.error(err.response?.data?.message || "Error sending request"),
+  });
+
+  // Respond Mutation
+  const respondMutation = useMutation({
+    mutationFn: ({ fromUserId, accept }) => apiInstance.post("/friends/respond", { fromUserId, accept }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["friends"] });
+      queryClient.invalidateQueries({ queryKey: ["pendingRequests"] });
+      toast.success("Response sent");
+    },
+  });
+
+  const handleSearch = (e) => {
     const q = e.target.value;
     setSearchQuery(q);
-    if (q.length < 2) {
-      setSearchResults([]);
-      setIsSearching(false);
-      return;
-    }
-
-    setIsSearching(true);
-    try {
-      const res = await axios.get(`http://localhost:5000/api/friends/search?q=${q}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setSearchResults(res.data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const sendRequest = async (userId) => {
-    try {
-      await axios.post("http://localhost:5000/api/friends/request", { targetUserId: userId }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      alert("Friend request sent!");
-      setSearchResults(prev => prev.filter(u => u._id !== userId));
-    } catch (err) {
-      alert(err.response?.data?.message || "Error sending request");
-    }
-  };
-
-  const respondRequest = async (fromUserId, accept) => {
-    try {
-      await axios.post("http://localhost:5000/api/friends/respond", { fromUserId, accept }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      onRefresh();
-    } catch (err) {
-      console.error(err);
-    }
+    if (q.length >= 2) searchUsers(q);
   };
 
   return (
@@ -81,7 +94,7 @@ const FriendsSidebar = ({ friends, pendingRequests, onSelectFriend, selectedFrie
                 <div style={userInfo}>
                   <div style={userName}>{user.username}</div>
                 </div>
-                <button onClick={() => sendRequest(user._id)} style={actionBtn}>
+                <button onClick={() => sendRequestMutation.mutate(user._id)} style={actionBtn}>
                   <UserPlus size={18} />
                 </button>
               </div>
@@ -100,8 +113,8 @@ const FriendsSidebar = ({ friends, pendingRequests, onSelectFriend, selectedFrie
                   <div style={userName}>{user.username}</div>
                 </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
-                  <button onClick={() => respondRequest(user._id, true)} style={acceptBtn}><Check size={16} /></button>
-                  <button onClick={() => respondRequest(user._id, false)} style={rejectBtn}><X size={16} /></button>
+                  <button onClick={() => respondMutation.mutate({ fromUserId: user._id, accept: true })} style={acceptBtn}><Check size={16} /></button>
+                  <button onClick={() => respondMutation.mutate({ fromUserId: user._id, accept: false })} style={rejectBtn}><X size={16} /></button>
                 </div>
               </div>
             ))}
@@ -116,8 +129,8 @@ const FriendsSidebar = ({ friends, pendingRequests, onSelectFriend, selectedFrie
             <motion.div 
               whileHover={{ x: 4 }}
               key={friend._id} 
-              onClick={() => onSelectFriend(friend)}
-              style={friend._id === selectedFriend?._id ? friendItemActive : friendItem}
+              onClick={() => navigate(`/dashboard/chat/${friend._id}`)}
+              style={friend._id === friendId ? friendItemActive : friendItem}
             >
               <div style={avatarWrapper}>
                 <div style={avatarStyle}>{friend.username[0].toUpperCase()}</div>

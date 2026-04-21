@@ -1,83 +1,124 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useSocket } from "../context/SocketContext";
-import axios from "axios";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import apiInstance from "../api/apiInstance";
 import { 
-  Search, 
-  Users, 
   MessageSquare, 
+  Users, 
   Video, 
-  LogOut, 
-  User as UserIcon,
-  Bell,
-  Settings,
-  Plus
+  Bell, 
+  Settings, 
+  LogOut 
 } from "lucide-react";
-
-// Components (defined below for simplicity, or can be separate files)
-import FriendsSidebar from "../components/FriendsSidebar";
-import ChatArea from "../components/ChatArea";
 import VideoCallOverlay from "../components/VideoCallOverlay";
-
 const Dashboard = () => {
-  const { user, logout, token } = useAuth();
+  const { user, logout } = useAuth();
   const socket = useSocket();
-  
-  const [selectedFriend, setSelectedFriend] = useState(null);
-  const [activeCall, setActiveCall] = useState(null); // { roomId, type: 'video'|'audio' }
-  const [notifications, setNotifications] = useState([]);
-  
-  const [friends, setFriends] = useState([]);
-  const [pendingRequests, setPendingRequests] = useState([]);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [activeCall, setActiveCall] = useState(null);
 
+  // Global socket listeners for real-time updates
   useEffect(() => {
-    fetchFriends();
-    fetchPendingRequests();
-    
     if (socket) {
-      socket.on("user-status", ({ userId, online }) => {
-        setFriends(prev => prev.map(f => f._id === userId ? { ...f, online } : f));
-      });
+      const handleUserStatus = () => {
+        // Cache invalidation handled by refetchInterval for now
+      };
+
+      const handleFriendRequest = ({ sender }) => {
+        toast.info(`New friend request from ${sender.username}`, {
+          description: "Would you like to connect?",
+          action: {
+            label: "Accept",
+            onClick: async () => {
+              try {
+                await apiInstance.post("/friends/respond", { fromUserId: sender._id, accept: true });
+                toast.success(`You are now friends with ${sender.username}`);
+                queryClient.invalidateQueries({ queryKey: ["friends"] });
+                queryClient.invalidateQueries({ queryKey: ["pendingRequests"] });
+              } catch (err) {
+                toast.error("Failed to accept request");
+              }
+            }
+          },
+          cancel: {
+            label: "Decline",
+            onClick: () => {
+              apiInstance.post("/friends/respond", { fromUserId: sender._id, accept: false });
+            }
+          }
+        });
+      };
+
+      const handleIncomingCall = ({ sender, type, roomId }) => {
+        const toastId = toast.info(`Incoming ${type} call from ${sender.username}`, {
+          description: "Do you want to join?",
+          duration: 30000, // 30s ringing
+          action: {
+            label: "Join",
+            onClick: () => {
+              setActiveCall({ roomId, friend: sender, type });
+              socket.emit("call-response", { callerId: sender._id, accept: true, roomId });
+            }
+          },
+          cancel: {
+            label: "Decline",
+            onClick: () => {
+              socket.emit("call-response", { callerId: sender._id, accept: false, roomId });
+            }
+          }
+        });
+      };
+
+      const handleNewMessage = (msg) => {
+        const currentPath = location.pathname;
+        const senderId = msg.sender._id;
+        
+        // Only notify if not in the active chat with this person
+        if (!currentPath.includes(`/dashboard/chat/${senderId}`)) {
+          toast.message(`New message from ${msg.sender.username}`, {
+            description: msg.content.length > 30 ? msg.content.substring(0, 30) + "..." : msg.content,
+            action: {
+              label: "View",
+              onClick: () => {
+                // Navigate to the chat
+                navigate(`/dashboard/chat/${senderId}`);
+              }
+            }
+          });
+          queryClient.invalidateQueries({ queryKey: ["messages", senderId] });
+        }
+      };
       
-      socket.on("friend-request", () => {
-        fetchPendingRequests();
-      });
+      socket.on("user-status", handleUserStatus);
+      socket.on("friend-request", handleFriendRequest);
+      socket.on("incoming-call", handleIncomingCall);
+      socket.on("new-message", handleNewMessage);
 
       return () => {
-        socket.off("user-status");
-        socket.off("friend-request");
+        socket.off("user-status", handleUserStatus);
+        socket.off("friend-request", handleFriendRequest);
+        socket.off("incoming-call", handleIncomingCall);
+        socket.off("new-message", handleNewMessage);
       };
     }
-  }, [socket]);
+  }, [socket, location.pathname, queryClient]);
 
-  const fetchFriends = async () => {
-    try {
-      const res = await axios.get("http://localhost:5000/api/friends/list", {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setFriends(res.data);
-    } catch (err) {
-      console.error("Error fetching friends", err);
-    }
-  };
-
-  const fetchPendingRequests = async () => {
-    try {
-      const res = await axios.get("http://localhost:5000/api/friends/pending", {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setPendingRequests(res.data);
-    } catch (err) {
-      console.error("Error fetching pending requests", err);
-    }
-  };
-
-  const startCall = (friend, type = 'video') => {
-    // Generate a room ID based on user IDs
-    const roomId = [user._id, friend._id].sort().join("-");
-    setActiveCall({ roomId, friend, type });
-  };
+  // Fetch count of pending requests for the badge
+  const { data: pendingRequests } = useQuery({
+    queryKey: ["pendingRequests"],
+    queryFn: async () => {
+      const res = await apiInstance.get("/friends/pending");
+      return res.data;
+    },
+    initialData: [],
+    refetchInterval: 30000, // Background refresh every 30s
+  });
 
   return (
     <div className="dashboard-layout" style={dashboardStyle}>
@@ -86,10 +127,21 @@ const Dashboard = () => {
         <div style={sidebarTop}>
           <div style={logoStyle}>AG</div>
           <nav style={navStyle}>
-            <button style={navItemActive}><MessageSquare size={24} /></button>
-            <button style={navItem}><Users size={24} /></button>
+            <NavLink 
+              to="/dashboard/chat" 
+              style={({ isActive }) => isActive ? navItemActive : navItem}
+            >
+              <MessageSquare size={24} />
+            </NavLink>
+            <NavLink 
+              to="/dashboard/friends" 
+              style={({ isActive }) => isActive ? navItemActive : navItem}
+            >
+              <Users size={24} />
+              {pendingRequests.length > 0 && <span style={badgeStyle}>{pendingRequests.length}</span>}
+            </NavLink>
             <button style={navItem}><Video size={24} /></button>
-            <button style={navItem}><Bell size={24} />{pendingRequests.length > 0 && <span style={badgeStyle}>{pendingRequests.length}</span>}</button>
+            <button style={navItem}><Bell size={24} /></button>
           </nav>
         </div>
         <div style={sidebarBottom}>
@@ -98,35 +150,9 @@ const Dashboard = () => {
         </div>
       </aside>
 
-      {/* Friends List Sidebar */}
-      <FriendsSidebar 
-        friends={friends} 
-        pendingRequests={pendingRequests}
-        onSelectFriend={setSelectedFriend}
-        selectedFriend={selectedFriend}
-        onRefresh={fetchFriends}
-      />
-
-      {/* Main Chat Area */}
+      {/* Main Content Area (Rendered by Router) */}
       <main style={mainContentStyle}>
-        {selectedFriend ? (
-          <ChatArea 
-            friend={selectedFriend} 
-            onStartCall={(type) => startCall(selectedFriend, type)} 
-          />
-        ) : (
-          <div style={emptyStateStyle}>
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              style={emptyCard}
-            >
-              <div style={welcomeIcon}><MessageSquare size={48} color="var(--accent)" /></div>
-              <h2>Select a friend to start chatting</h2>
-              <p>Connect with your friends via high-quality audio and video calls.</p>
-            </motion.div>
-          </div>
-        )}
+        <Outlet context={{ setActiveCall }} />
       </main>
 
       {/* Video Call Overlay */}
@@ -142,7 +168,7 @@ const Dashboard = () => {
   );
 };
 
-// Styles
+// Styles (unchanged from previous or slightly adjusted)
 const dashboardStyle = {
   display: "flex",
   height: "100vh",
@@ -200,6 +226,8 @@ const navItem = {
   color: "var(--text)",
   opacity: 0.6,
   position: "relative",
+  cursor: "pointer",
+  transition: "all 0.2s ease",
 };
 
 const navItemActive = {
@@ -232,30 +260,6 @@ const mainContentStyle = {
   flexDirection: "column",
   background: "var(--code-bg)",
   position: "relative",
-};
-
-const emptyStateStyle = {
-  flex: 1,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "40px",
-};
-
-const emptyCard = {
-  textAlign: "center",
-  maxWidth: "400px",
-};
-
-const welcomeIcon = {
-  width: "100px",
-  height: "100px",
-  background: "var(--accent-bg)",
-  borderRadius: "30px",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  margin: "0 auto 24px",
 };
 
 export default Dashboard;

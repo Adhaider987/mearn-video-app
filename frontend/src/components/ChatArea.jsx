@@ -1,61 +1,94 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Video, Phone, MoreVertical, Smile, Paperclip } from "lucide-react";
+import { useParams, useOutletContext } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import apiInstance from "../api/apiInstance";
 import { useAuth } from "../context/AuthContext";
 import { useSocket } from "../context/SocketContext";
-import axios from "axios";
+import { toast } from "sonner";
 
-const ChatArea = ({ friend, onStartCall }) => {
-  const { user, token } = useAuth();
+const ChatArea = () => {
+  const { friendId } = useParams();
+  const { user } = useAuth();
   const socket = useSocket();
+  const { setActiveCall } = useOutletContext();
+  const queryClient = useQueryClient();
+  
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const messagesEndRef = useRef(null);
 
+  // Fetch Friend Details (To get active friend info)
+  const { data: friends = [] } = useQuery({ 
+    queryKey: ["friends"],
+    queryFn: async () => {
+      const res = await apiInstance.get("/friends/list");
+      return res.data;
+    }
+  });
+  const friend = friends.find(f => f._id === friendId);
+
+  // Fetch Message History
+  const { data: history = [], isLoading: isHistoryLoading } = useQuery({
+    queryKey: ["messages", friendId],
+    queryFn: async () => {
+      const res = await apiInstance.get(`/messages/${friendId}`);
+      return res.data;
+    },
+    enabled: !!friendId,
+  });
+
   useEffect(() => {
-    fetchMessages();
-    
+    if (history.length > 0) {
+      setMessages(history);
+    } else {
+      setMessages([]);
+    }
+  }, [history]);
+
+  useEffect(() => {
     if (socket) {
-      socket.on("new-message", (msg) => {
-        if ((msg.sender._id === friend._id && msg.receiver === user.id) || 
-            (msg.sender._id === user.id && msg.receiver === friend._id)) {
+      const handleNewMessage = (msg) => {
+        // Compare with normalized _id
+        const currentUserId = user._id;
+        const isFromFriend = msg.sender._id === friendId && msg.receiver === currentUserId;
+        const isFromMe = msg.sender._id === currentUserId && msg.receiver === friendId;
+
+        if (isFromFriend || isFromMe) {
           setMessages(prev => [...prev, msg]);
         }
-      });
-
-      return () => {
-        socket.off("new-message");
       };
+
+      socket.on("new-message", handleNewMessage);
+      return () => socket.off("new-message", handleNewMessage);
     }
-  }, [friend, socket]);
+  }, [friendId, socket, user._id]);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const fetchMessages = async () => {
-    // Note: I haven't implemented a dedicated "get messages" route yet.
-    // For now, I'll just clear messages when switching friends.
-    // In a real app, I'd fetch history from the DB here.
-    setMessages([]);
-  };
-
-  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+  }, [messages]);
 
   const sendMessage = (e) => {
     e.preventDefault();
     if (!inputText.trim()) return;
 
     const messageData = {
-      receiverId: friend._id,
+      receiverId: friendId,
       content: inputText,
     };
 
     socket.emit("send-message", messageData);
     setInputText("");
   };
+
+  const onStartCall = (type) => {
+    if (!friend) return;
+    const roomId = [user.id, friend._id].sort().join("-");
+    setActiveCall({ roomId, friend, type });
+  };
+
+  if (!friend) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
 
   return (
     <div style={chatContainer}>

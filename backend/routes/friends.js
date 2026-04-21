@@ -41,6 +41,33 @@ router.get("/search", auth, async (req, res) => {
   }
 });
 
+// Get suggested users (Discovery)
+router.get("/suggested", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    
+    // Users to exclude: self, current friends, and people already requested (sent/received)
+    const excludeIds = [
+      req.userId,
+      ...user.friends,
+      ...user.friendRequests
+    ];
+
+    // We also need to find users who HAVE the current user in THEIR friendRequests
+    // Actually, MongoDB can handle this with a single query
+    const suggested = await User.find({
+      $and: [
+        { _id: { $nin: excludeIds } },
+        { friendRequests: { $ne: req.userId } }
+      ]
+    }).select("username email avatar online").limit(20);
+
+    res.json(suggested);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Send friend request
 router.post("/request", auth, async (req, res) => {
   try {
@@ -56,6 +83,18 @@ router.post("/request", auth, async (req, res) => {
 
     targetUser.friendRequests.push(req.userId);
     await targetUser.save();
+
+    // Real-time signaling
+    const io = req.app.get("io");
+    const getSocketIdsByUserId = req.app.get("getSocketIdsByUserId");
+    const targetSockets = getSocketIdsByUserId(targetUserId);
+    
+    if (targetSockets.size > 0) {
+      const sender = await User.findById(req.userId).select("username avatar online");
+      targetSockets.forEach(sid => {
+        io.to(sid).emit("friend-request", { sender });
+      });
+    }
 
     res.json({ message: "Friend request sent" });
   } catch (error) {

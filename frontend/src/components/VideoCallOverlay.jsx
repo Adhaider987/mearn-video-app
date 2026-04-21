@@ -49,6 +49,13 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         
         // Join the signaling room
         socket.emit("join-room", roomId);
+
+        // Notify the target user about the incoming call
+        socket.emit("start-call", {
+          targetUserId: friend._id,
+          type: type,
+          roomId: roomId
+        });
       } catch (err) {
         console.error("Error accessing media devices:", err);
         alert("Could not access camera or microphone.");

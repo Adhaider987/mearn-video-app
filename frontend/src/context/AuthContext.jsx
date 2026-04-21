@@ -1,5 +1,6 @@
 import React, { createContext, useState, useEffect, useContext } from "react";
-import axios from "axios";
+import apiInstance from "../api/apiInstance";
+import { toast } from "sonner";
 
 const AuthContext = createContext();
 
@@ -23,12 +24,9 @@ export const AuthProvider = ({ children }) => {
 
   const fetchUser = async () => {
     try {
-      const res = await axios.get("http://localhost:5000/api/auth/me", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await apiInstance.get("/auth/me");
       setUser(res.data);
     } catch (err) {
-      console.error("Auth error", err);
       setToken(null);
     } finally {
       setLoading(false);
@@ -36,22 +34,28 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async (email, password) => {
-    const res = await axios.post("http://localhost:5000/api/auth/login", { email, password });
+    const res = await apiInstance.post("/auth/login", { email, password });
     setToken(res.data.token);
-    setUser(res.data.user);
+    // Normalize user object since backend might return 'id' or '_id'
+    const userData = res.data.user;
+    setUser({ ...userData, _id: userData.id || userData._id });
+    toast.success("Welcome back!");
     return res.data;
   };
 
   const signup = async (username, email, password) => {
-    const res = await axios.post("http://localhost:5000/api/auth/signup", { username, email, password });
+    const res = await apiInstance.post("/auth/signup", { username, email, password });
     setToken(res.data.token);
-    setUser(res.data.user);
+    const userData = res.data.user;
+    setUser({ ...userData, _id: userData.id || userData._id });
+    toast.success("Account created successfully!");
     return res.data;
   };
 
   const logout = () => {
     setToken(null);
     setUser(null);
+    toast.info("Logged out");
   };
 
   return (
