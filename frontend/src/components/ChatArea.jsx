@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Video, Phone, MoreVertical, Smile, Paperclip, ArrowLeft } from "lucide-react";
+import { Send, Video, Phone, MoreVertical, Smile, Paperclip, ArrowLeft, PlayCircle } from "lucide-react";
 import { useParams, useOutletContext, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import apiInstance from "../api/apiInstance";
@@ -80,7 +80,17 @@ const ChatArea = () => {
     setActiveCall({ roomId, friend, type, isIncoming: false });
   };
 
-  if (!friend) return <div className="flex-1 flex items-center justify-center text-premium-text">Selecting a chat...</div>;
+  const joinMeetingByInvite = (roomId) => {
+    setActiveCall({
+      roomId,
+      friend: friend || { username: "Meeting Room", _id: "temp" },
+      type: "video",
+      isIncoming: false,
+      status: "connecting"
+    });
+  };
+
+  if (!friend) return <div className="flex-1 flex items-center justify-center text-premium-text bg-premium-bg-alt">Selecting a chat...</div>;
 
   return (
     <div className="flex flex-col h-full bg-premium-bg-alt">
@@ -89,7 +99,7 @@ const ChatArea = () => {
         <div className="flex items-center gap-3">
           <button 
             onClick={() => navigate("/dashboard/chat")} 
-            className="md:hidden p-2 hover:bg-white/5 rounded-full transition-colors mr-2"
+            className="md:hidden p-2 hover:bg-white/5 rounded-full transition-colors mr-2 cursor-pointer"
           >
             <ArrowLeft size={24} />
           </button>
@@ -117,10 +127,13 @@ const ChatArea = () => {
       </header>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 no-scrollbar">
+      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-5 no-scrollbar">
         <AnimatePresence initial={false}>
           {messages.map((msg, idx) => {
             const isMe = msg.sender._id === user._id;
+            const isInvite = msg.content.startsWith("JOIN_MEETING:");
+            const roomId = isInvite ? msg.content.split(":")[1] : null;
+
             return (
               <motion.div
                 key={msg._id || idx}
@@ -129,20 +142,45 @@ const ChatArea = () => {
                 className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}
               >
                 {!isMe && (
-                  <div className="w-7 h-7 rounded-lg bg-premium-accent/20 text-premium-accent text-[10px] flex items-center justify-center font-bold uppercase transition-transform hover:scale-110 cursor-pointer">
+                  <div className="w-7 h-7 rounded-lg bg-premium-accent/20 text-premium-accent text-[10px] flex items-center justify-center font-bold uppercase transition-transform hover:scale-110 cursor-pointer mb-1">
                     {friend.username[0]}
                   </div>
                 )}
-                <div className={`max-w-[70%] p-4 text-sm leading-6 relative ${
-                  isMe 
-                    ? 'bg-premium-accent text-white rounded-[18px_18px_4px_18px] shadow-lg shadow-premium-accent/20' 
-                    : 'bg-white/5 text-premium-text-h rounded-[18px_18px_18px_4px] border border-white/5 shadow-sm'
-                }`}>
-                  {msg.content}
-                  <div className={`text-[10px] mt-1 text-right opacity-60`}>
-                    {new Date(msg.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                
+                {isInvite ? (
+                  <div className={`max-w-[85%] p-1 rounded-[24px] ${
+                    isMe ? 'bg-premium-accent/20' : 'bg-white/5'
+                  } border border-white/10 shadow-xl overflow-hidden`}>
+                    <div className="bg-[#1a1b23] p-5 rounded-[20px] flex flex-col gap-4 border border-white/5">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-premium-accent flex items-center justify-center text-white shadow-lg shadow-premium-accent/20 animate-pulse">
+                          <Video size={24} />
+                        </div>
+                        <div>
+                          <p className="font-bold text-premium-text-h text-sm">Meeting Invitation</p>
+                          <p className="text-xs text-premium-text opacity-70">Room: {roomId}</p>
+                        </div>
+                      </div>
+                      <button 
+                         onClick={() => joinMeetingByInvite(roomId)}
+                         className="w-full py-3 bg-premium-accent text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:scale-105 active:scale-95 transition-all shadow-lg shadow-premium-accent/30"
+                      >
+                        <PlayCircle size={18} /> Join Room
+                      </button>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className={`max-w-[70%] p-4 text-sm leading-6 relative group ${
+                    isMe 
+                      ? 'bg-premium-accent text-white rounded-[18px_18px_4px_18px] shadow-lg shadow-premium-accent/20' 
+                      : 'bg-white/5 text-premium-text-h rounded-[18px_18px_18px_4px] border border-white/5 shadow-sm'
+                  }`}>
+                    {msg.content}
+                    <div className={`text-[10px] mt-1 text-right opacity-40 transition-opacity group-hover:opacity-100`}>
+                      {new Date(msg.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                )}
               </motion.div>
             );
           })}

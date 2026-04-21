@@ -14,7 +14,11 @@ import {
   Settings, 
   LogOut,
   X,
-  Info
+  Info,
+  Plus,
+  ArrowRight,
+  Check,
+  Send
 } from "lucide-react";
 import VideoCallOverlay from "../components/VideoCallOverlay";
 
@@ -27,13 +31,18 @@ const Dashboard = () => {
   
   const [activeCall, setActiveCall] = useState(null);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isMeetingModalOpen, setIsMeetingModalOpen] = useState(false);
+  const [meetingStep, setMeetingStep] = useState("choice"); // choice, join, invite
+  const [joinRoomId, setJoinRoomId] = useState("");
+  const [selectedFriends, setSelectedFriends] = useState([]);
+  
   const locationRef = useRef(location.pathname);
 
   useEffect(() => {
     locationRef.current = location.pathname;
   }, [location.pathname]);
 
-  // Global socket listeners for real-time updates
+  // Global socket listeners
   useEffect(() => {
     if (socket) {
       const handleFriendRequest = ({ sender }) => {
@@ -100,22 +109,53 @@ const Dashboard = () => {
     refetchInterval: 30000,
   });
 
-  const startInstantMeeting = () => {
+  const { data: friends = [] } = useQuery({
+    queryKey: ["friends"],
+    queryFn: async () => {
+      const res = await apiInstance.get("/friends/list");
+      return res.data;
+    }
+  });
+
+  const handleStartHostMeeting = () => {
     const roomId = `room-${Math.random().toString(36).substring(7)}`;
+    setJoinRoomId(roomId);
+    setMeetingStep("invite");
+  };
+
+  const handleJoinExisting = (e) => {
+    e.preventDefault();
+    if (!joinRoomId.trim()) return;
     setActiveCall({
-      roomId,
+      roomId: joinRoomId,
+      friend: { username: "Meeting Room", _id: "temp" },
+      type: "video",
+      isIncoming: false,
+      status: "connecting"
+    });
+    setIsMeetingModalOpen(false);
+  };
+
+  const shareInvitesAndStart = () => {
+    // Send INVITE messages
+    selectedFriends.forEach(fid => {
+      socket.emit("send-message", { 
+        receiverId: fid, 
+        content: `JOIN_MEETING:${joinRoomId}` 
+      });
+    });
+
+    setActiveCall({
+      roomId: joinRoomId,
       friend: { username: "Instant Room", _id: "temp" },
       type: "video",
       isIncoming: false,
       status: "connecting"
     });
-    toast.success("Instant meeting started! Use the Room ID to invite others.", {
-      description: `Room ID: ${roomId}`,
-      action: {
-        label: "Copy",
-        onClick: () => navigator.clipboard.writeText(roomId)
-      }
-    });
+    
+    toast.success("Meeting started and invitations sent!");
+    setIsMeetingModalOpen(false);
+    setSelectedFriends([]);
   };
 
   const NavItems = () => (
@@ -127,7 +167,7 @@ const Dashboard = () => {
         <Users size={24} />
         {pendingRequests.length > 0 && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-premium-bg" />}
       </NavLink>
-      <button onClick={startInstantMeeting} className="nav-item">
+      <button onClick={() => { setMeetingStep("choice"); setIsMeetingModalOpen(true); }} className="nav-item">
         <Video size={24} />
       </button>
       <button onClick={() => setIsNotificationsOpen(true)} className="nav-item">
@@ -139,7 +179,7 @@ const Dashboard = () => {
 
   return (
     <div className="flex h-screen bg-premium-bg text-premium-text-h overflow-hidden font-sans">
-      {/* Sidebar Navigation (Desktop) */}
+      {/* Sidebar Navigation */}
       <aside className="w-20 flex flex-col justify-between items-center py-6 border-r border-white/5 z-[100] bg-premium-bg hidden md:flex">
         <div className="flex flex-col items-center gap-8">
           <div className="w-12 h-12 bg-premium-accent rounded-2xl flex items-center justify-center text-white font-extrabold text-xl shadow-lg shadow-premium-accent/20">AG</div>
@@ -147,38 +187,149 @@ const Dashboard = () => {
             <NavItems />
           </nav>
         </div>
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 text-premium-text/60">
           <button className="nav-item"><Settings size={24} /></button>
           <button onClick={logout} className="nav-item text-red-500 hover:bg-red-500/10"><LogOut size={24} /></button>
         </div>
       </aside>
 
-      {/* Bottom Navigation (Mobile) */}
+      {/* Bottom Nav (Mobile) */}
       <nav className="fixed bottom-6 left-6 right-6 h-[72px] flex justify-evenly items-center z-[100] rounded-[24px] glass md:hidden">
         <NavItems />
-        <button onClick={logout} className="nav-item text-red-500"><LogOut size={24} /></button>
+        <button onClick={logout} className="p-3 text-red-500"><LogOut size={24} /></button>
       </nav>
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex flex-col bg-premium-bg-alt relative">
+      {/* Main Area */}
+      <main className="flex-1 flex flex-col bg-premium-bg-alt relative pb-32 md:pb-0 transition-all duration-300">
         <Outlet context={{ setActiveCall }} />
       </main>
+
+      {/* Meeting Hub Modal */}
+      <AnimatePresence>
+        {isMeetingModalOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setIsMeetingModalOpen(false)}
+              className="fixed inset-0 bg-black/80 backdrop-blur-md z-[300]"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+              className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md glass z-[310] p-8 rounded-[32px] shadow-2xl border border-white/10"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold">Meeting Hub</h2>
+                <button onClick={() => setIsMeetingModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+
+              {meetingStep === "choice" && (
+                <div className="space-y-4">
+                  <button 
+                    onClick={handleStartHostMeeting}
+                    className="w-full p-6 bg-premium-accent/10 border border-premium-accent/20 rounded-2xl flex items-center gap-4 hover:bg-premium-accent/20 transition-all text-left"
+                  >
+                    <div className="w-12 h-12 bg-premium-accent rounded-xl flex items-center justify-center text-white shadow-lg">
+                      <Plus size={24} />
+                    </div>
+                    <div>
+                      <div className="font-bold text-premium-text-h">New Meeting</div>
+                      <p className="text-sm text-premium-text">Start a room and invite friends</p>
+                    </div>
+                  </button>
+                  <button 
+                    onClick={() => setMeetingStep("join")}
+                    className="w-full p-6 bg-white/5 border border-white/10 rounded-2xl flex items-center gap-4 hover:bg-white/10 transition-all text-left"
+                  >
+                    <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center text-premium-text-h">
+                      <ArrowRight size={24} />
+                    </div>
+                    <div>
+                      <div className="font-bold text-premium-text-h">Join with ID</div>
+                      <p className="text-sm text-premium-text">Enter a code to join a call</p>
+                    </div>
+                  </button>
+                </div>
+              )}
+
+              {meetingStep === "join" && (
+                <form onSubmit={handleJoinExisting} className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-premium-text ml-1">Room ID</label>
+                    <input 
+                      autoFocus
+                      type="text" 
+                      placeholder="e.g. room-abc-123"
+                      value={joinRoomId}
+                      onChange={(e) => setJoinRoomId(e.target.value)}
+                      className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-premium-text-h outline-none focus:border-premium-accent transition-all"
+                    />
+                  </div>
+                  <button type="submit" className="w-full py-4 bg-premium-accent text-white rounded-2xl font-bold shadow-lg shadow-premium-accent/20">
+                    Join Call
+                  </button>
+                  <button onClick={() => setMeetingStep("choice")} className="w-full py-2 text-premium-text text-sm hover:underline">
+                    Back to options
+                  </button>
+                </form>
+              )}
+
+              {meetingStep === "invite" && (
+                <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-premium-text ml-1 tracking-wide">SHARE WITH FRIENDS</label>
+                    <div className="max-h-[240px] overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                      {friends.length > 0 ? friends.map(f => (
+                        <div 
+                          key={f._id} 
+                          onClick={() => {
+                            setSelectedFriends(prev => prev.includes(f._id) ? prev.filter(id => id !== f._id) : [...prev, f._id]);
+                          }}
+                          className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${
+                            selectedFriends.includes(f._id) ? 'bg-premium-accent/20 border-premium-accent/40' : 'bg-white/5 border-white/5 hover:bg-white/10'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-lg bg-premium-accent/10 flex items-center justify-center text-premium-accent font-bold uppercase">
+                              {f.username[0]}
+                            </div>
+                            <span className="font-medium text-sm">{f.username}</span>
+                          </div>
+                          {selectedFriends.includes(f._id) && <div className="w-6 h-6 bg-premium-accent rounded-full flex items-center justify-center"><Check size={14} className="text-white" /></div>}
+                        </div>
+                      )) : (
+                        <p className="text-center py-8 text-sm text-premium-text opacity-50 italic">No friends to invite</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => setMeetingStep("choice")} className="flex-1 py-4 bg-white/5 rounded-2xl font-bold text-premium-text-h">Back</button>
+                    <button 
+                      onClick={shareInvitesAndStart}
+                      className="flex-[2] py-4 bg-premium-accent text-white rounded-2xl font-bold shadow-lg shadow-premium-accent/20 flex items-center justify-center gap-2"
+                    >
+                      Invite & Start <Send size={18} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Notifications Drawer */}
       <AnimatePresence>
         {isNotificationsOpen && (
           <>
             <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setIsNotificationsOpen(false)}
               className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200]"
             />
             <motion.div 
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
+              initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
               className="fixed top-0 right-0 h-full w-full max-w-sm glass z-[210] p-6 shadow-2xl flex flex-col"
             >
@@ -187,39 +338,25 @@ const Dashboard = () => {
                   <Bell size={20} className="text-premium-accent" />
                   Notifications
                 </h2>
-                <button onClick={() => setIsNotificationsOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-                  <X size={20} />
-                </button>
+                <button onClick={() => setIsNotificationsOpen(false)} className="p-2 hover:bg-white/10 rounded-full"><X size={20} /></button>
               </div>
 
               <div className="flex-1 overflow-y-auto space-y-4">
-                {pendingRequests.length > 0 ? (
-                  pendingRequests.map(req => (
-                    <div key={req._id} className="p-4 bg-white/5 rounded-2xl border border-white/5 flex flex-col gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-premium-accent/20 rounded-xl flex items-center justify-center text-premium-accent font-bold uppercase">
-                          {req.username[0]}
-                        </div>
-                        <div>
-                          <p className="font-medium text-sm">{req.username}</p>
-                          <p className="text-xs text-premium-text opacity-70">Wants to be your friend</p>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={() => navigate('/dashboard/friends')}
-                          className="flex-1 py-2 bg-premium-accent text-white rounded-lg text-xs font-semibold"
-                        >
-                          Review Request
-                        </button>
+                {pendingRequests.length > 0 ? pendingRequests.map(req => (
+                  <div key={req._id} className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-premium-accent/20 rounded-xl flex items-center justify-center text-premium-accent font-bold uppercase">{req.username[0]}</div>
+                      <div>
+                        <p className="font-medium text-sm">{req.username}</p>
+                        <p className="text-xs text-premium-text opacity-70">Wants to be your friend</p>
                       </div>
                     </div>
-                  ))
-                ) : (
-                  <div className="flex flex-col items-center justify-center py-20 text-center opacity-40">
+                    <button onClick={() => navigate('/dashboard/friends')} className="w-full py-2 bg-premium-accent text-white rounded-lg text-xs font-semibold">Review</button>
+                  </div>
+                )) : (
+                  <div className="flex flex-col items-center justify-center py-20 opacity-40">
                     <Info size={48} className="mb-4" />
-                    <p className="text-sm font-medium">All caught up!</p>
-                    <p className="text-xs">No new notifications at this time.</p>
+                    <p className="text-sm font-medium italic">All caught up!</p>
                   </div>
                 )}
               </div>

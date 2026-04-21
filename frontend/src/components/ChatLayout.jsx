@@ -6,11 +6,14 @@ const ChatLayout = () => {
   const context = useOutletContext();
   
   return (
-    <div className="chat-layout" style={{ display: 'flex', flex: 1, height: '100%', overflow: 'hidden' }}>
-      <div className={`friends-list-container ${friendId ? 'hidden-mobile' : 'full-mobile'}`} style={{ display: 'flex' }}>
+    <div className="flex flex-1 h-full overflow-hidden bg-premium-bg">
+      {/* Sidebar - Hidden on mobile if a chat is active */}
+      <div className={`w-full md:w-80 lg:w-96 flex-shrink-0 border-r border-white/5 ${friendId ? 'hidden md:flex' : 'flex'}`}>
         <FriendsSidebar />
       </div>
-      <div className={`chat-area-container ${!friendId ? 'hidden-mobile' : 'full-mobile'}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--code-bg)' }}>
+      
+      {/* Chat Area - Hidden on mobile if NO chat is active */}
+      <div className={`flex-1 flex flex-col bg-premium-bg-alt ${!friendId ? 'hidden md:flex' : 'flex'}`}>
         <Outlet context={context} />
       </div>
     </div>

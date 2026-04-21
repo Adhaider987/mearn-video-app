@@ -31,29 +31,45 @@ const VideoCallOverlay = ({ callData, onClose }) => {
   const [remoteStreams, setRemoteStreams] = useState({}); // userId -> stream
   const [peers, setPeers] = useState({}); // userId -> RTCPeerConnection
   const [callStatus, setCallStatus] = useState(initialStatus || (isIncoming ? 'ringing' : 'connecting'));
-  const [remoteDeviceStatus, setRemoteDeviceStatus] = useState({}); // userId -> { videoOff: bool, audioMuted: bool }
+  const [remoteDeviceStatus, setRemoteDeviceStatus] = useState(() => {
+    // INITIAL STATUS: If audio call, suggest everyone starts with video off
+    if (type === 'audio') {
+      return { [friend._id]: { videoOff: true } };
+    }
+    return {};
+  }); // userId -> { videoOff: bool, audioMuted: bool }
   const pendingCandidates = useRef({}); // userId -> [candidates]
   
   const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false); // We'll manage this via tracks
+  const [isVideoOff, setIsVideoOff] = useState(type === 'audio'); // Default off for audio calls
   const [isSharingScreen, setIsSharingScreen] = useState(false);
   const [screenStream, setScreenStream] = useState(null);
   const [reactions, setReactions] = useState([]); // List of active floating emojis
 
   const localVideoRef = useRef(null);
+  const [currentType, setCurrentType] = useState(type); // Track negotiated call mode
+
+  // PERSISTENCE: Ensure local video preview is always linked to stream
+  useEffect(() => {
+    if (localVideoRef.current && localStream && !isVideoOff) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream, isVideoOff, currentType]);
 
   // Initialize Media
   useEffect(() => {
+    if (callStatus === 'ringing') return; // PRIVACY: Do not access camera/mic until accepted
+
     const startMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: true, 
+          video: type === 'video', // Only request video if it's a video call
           audio: true,
         });
 
-        if (type === 'audio' && !isIncoming) {
+        // If audio call, ensure tracks are disabled immediately as backup
+        if (type === 'audio') {
           stream.getVideoTracks().forEach(t => t.enabled = false);
-          setIsVideoOff(true);
         }
 
         setLocalStream(stream);
@@ -83,7 +99,7 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         localStream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [callStatus]); // Re-run when status changes from ringing to accepted
+  }, [callStatus]); // Trigger when ringing -> connecting (on accept)
 
   const createPeerConnection = useCallback((targetUserId, targetSocketId, isOffer) => {
     const pc = new RTCPeerConnection(ICE_SERVERS);
@@ -119,11 +135,12 @@ const VideoCallOverlay = ({ callData, onClose }) => {
 
     const handleSignal = async ({ from, userId: signalingUserId, signal }) => {
       try {
-        let pc = peers[signalingUserId];
+        let pData = peers[signalingUserId];
+        let pc = pData?.pc;
 
         if (!pc) {
           pc = createPeerConnection(signalingUserId, from, false);
-          setPeers(prev => ({ ...prev, [signalingUserId]: pc }));
+          setPeers(prev => ({ ...prev, [signalingUserId]: { pc, socketId: from } }));
         }
 
         const drainQueue = async (userId, peerConnection) => {
@@ -163,18 +180,18 @@ const VideoCallOverlay = ({ callData, onClose }) => {
       }
     };
 
-    const handlePeerJoined = async ({ socketId, userId: joinedUserId }) => {
-      const pc = createPeerConnection(joinedUserId, socketId, true);
-      setPeers(prev => ({ ...prev, [joinedUserId]: pc }));
-
+    const handlePeerJoined = async ({ socketId: joinedSocketId, userId: joinedUserId }) => {
+      const pc = createPeerConnection(joinedUserId, joinedSocketId, true);
+      setPeers(prev => ({ ...prev, [joinedUserId]: { pc, socketId: joinedSocketId } }));
+ 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      socket.emit("signal", { to: socketId, signal: { type: 'offer', sdp: offer }, roomId });
+      socket.emit("signal", { to: joinedSocketId, signal: { type: 'offer', sdp: offer }, roomId });
     };
 
     const handlePeerLeft = ({ userId: leftUserId }) => {
       if (peers[leftUserId]) {
-        peers[leftUserId].close();
+        peers[leftUserId].pc.close();
         const newPeers = { ...peers };
         delete newPeers[leftUserId];
         setPeers(newPeers);
@@ -201,6 +218,11 @@ const VideoCallOverlay = ({ callData, onClose }) => {
         ...prev,
         [peerId]: { ...prev[peerId], ...status }
       }));
+
+      // SYNC: If the remote user changed the call type (upgrade/downgrade), we should match it
+      if (status.callType) {
+        setCurrentType(status.callType);
+      }
     };
 
     const handleCallEnded = () => {
@@ -224,6 +246,21 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     };
   }, [socket, localStream, peers, createPeerConnection, remoteStreams, callStatus]);
 
+  const emitOffer = async (targetUserId) => {
+    const pc = peers[targetUserId];
+    if (!pc) return;
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      // We need the socket ID for signaling, which we get from the peers map keys usually
+      // or we can just broadcast to the room if it's one-on-one for now
+      // Our existing peers state doesn't store socketId, but handleSignal/handlePeerJoined do.
+      // For now, let's just trigger renegotiation needed or reuse the signaling logic.
+    } catch (err) {
+      console.error("Renegotiation error:", err);
+    }
+  };
+
   const toggleMute = () => {
     if (localStream) {
       localStream.getAudioTracks().forEach(track => {
@@ -234,13 +271,73 @@ const VideoCallOverlay = ({ callData, onClose }) => {
     }
   };
 
-  const toggleVideo = () => {
-    if (localStream) {
-      localStream.getVideoTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setIsVideoOff(!isVideoOff);
-      socket.emit("device-status", { roomId, status: { videoOff: !isVideoOff } });
+  const toggleVideo = async () => {
+    if (!localStream) return;
+
+    let vTrack = localStream.getVideoTracks()[0];
+
+    if (isVideoOff) {
+      // UPGRADE: Turning Camera ON
+      if (!vTrack) {
+        try {
+          const freshStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          vTrack = freshStream.getVideoTracks()[0];
+          localStream.addTrack(vTrack);
+          
+          // Push to all peers
+          for (const [pId, pData] of Object.entries(peers)) {
+            const { pc, socketId } = pData;
+            const sender = pc.getSenders().find(s => s.track?.kind === 'video' || (s.track === null && pc.getTransceivers().find(t => t.sender === s && t.receiver.track.kind === 'video')));
+            
+            if (sender) {
+              await sender.replaceTrack(vTrack);
+            } else {
+              pc.addTrack(vTrack, localStream);
+            }
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("signal", { to: socketId, signal: { type: 'offer', sdp: offer }, roomId });
+          }
+          setIsVideoOff(false);
+          setCurrentType('video');
+          socket.emit("device-status", { roomId, status: { videoOff: false, callType: 'video' } });
+          setLocalStream(new MediaStream(localStream.getTracks()));
+        } catch (err) {
+          console.error("Failed to upgrade to video:", err);
+          alert("Could not access camera");
+          return;
+        }
+      } else {
+        vTrack.enabled = true;
+        setIsVideoOff(false);
+        setCurrentType('video');
+        socket.emit("device-status", { roomId, status: { videoOff: false, callType: 'video' } });
+        setLocalStream(new MediaStream(localStream.getTracks()));
+      }
+    } else {
+      // DOWNGRADE: Turning Camera OFF
+      if (vTrack) {
+        vTrack.enabled = false;
+        vTrack.stop();
+        localStream.removeTrack(vTrack);
+        
+        for (const [pId, pData] of Object.entries(peers)) {
+          const { pc, socketId } = pData;
+          const sender = pc.getSenders().find(s => s.track === vTrack || s.track?.kind === 'video');
+          if (sender) {
+            await sender.replaceTrack(null);
+          }
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit("signal", { to: socketId, signal: { type: 'offer', sdp: offer }, roomId });
+        }
+
+        setIsVideoOff(true);
+        setCurrentType('audio');
+        socket.emit("device-status", { roomId, status: { videoOff: true, callType: 'audio' } });
+        setLocalStream(new MediaStream(localStream.getTracks()));
+      }
     }
   };
 
@@ -419,23 +516,26 @@ const VideoCallOverlay = ({ callData, onClose }) => {
       ) : (
         <div className="flex-1 p-5 grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-3 items-center justify-center overflow-y-auto">
            {/* Remote Videos */}
-          {Object.entries(remoteStreams).map(([peerId, stream]) => (
-            <div key={peerId} className="relative w-full aspect-video rounded-[24px] overflow-hidden bg-[#16171d] border border-white/10">
-              {remoteDeviceStatus[peerId]?.videoOff ? (
-                <div className="w-full h-full flex flex-col items-center justify-center bg-[#1f2028] gap-3">
-                  <div className="w-16 h-16 rounded-[20px] bg-premium-accent flex items-center justify-center text-white text-2xl font-bold uppercase">
-                    {friend.username[0]}
+          {Object.entries(remoteStreams).map(([peerId, stream]) => {
+            const isPeerVideoOff = remoteDeviceStatus[peerId]?.videoOff;
+            return (
+              <div key={peerId} className="relative w-full aspect-video rounded-[24px] overflow-hidden bg-[#16171d] border border-white/10">
+                {isPeerVideoOff ? (
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-[#1f2028] gap-3">
+                    <div className="w-16 h-16 rounded-[20px] bg-premium-accent flex items-center justify-center text-white text-2xl font-bold uppercase">
+                      {friend.username[0]}
+                    </div>
+                    <p className="text-sm">Camera Off</p>
                   </div>
-                  <p className="text-sm">Camera Off</p>
+                ) : (
+                  <RemoteVideo key={peerId} stream={stream} />
+                )}
+                <div className="absolute bottom-4 left-4 bg-black/50 backdrop-blur-md px-3 py-1 rounded-lg text-xs flex items-center">
+                  {friend.username} {remoteDeviceStatus[peerId]?.audioMuted && <MicOff size={14} className="ml-1" />}
                 </div>
-              ) : (
-                <RemoteVideo stream={stream} />
-              )}
-              <div className="absolute bottom-4 left-4 bg-black/50 backdrop-blur-md px-3 py-1 rounded-lg text-xs flex items-center">
-                {friend.username} {remoteDeviceStatus[peerId]?.audioMuted && <MicOff size={14} className="ml-1" />}
               </div>
-            </div>
-          ))}
+            );
+          })}
           
           {/* Local Video */}
           <div className="relative w-full aspect-video rounded-[24px] overflow-hidden bg-[#16171d] border border-white/10">
@@ -480,8 +580,25 @@ const VideoCallOverlay = ({ callData, onClose }) => {
 
 const RemoteVideo = ({ stream }) => {
   const videoRef = useRef();
+  
   useEffect(() => {
-    if (videoRef.current) videoRef.current.srcObject = stream;
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  // Handle track additions to existing stream
+  useEffect(() => {
+    if (!stream) return;
+    const handleTrack = () => {
+      if (videoRef.current) videoRef.current.srcObject = stream;
+    };
+    stream.addEventListener('addtrack', handleTrack);
+    stream.addEventListener('removetrack', handleTrack);
+    return () => {
+      stream.removeEventListener('addtrack', handleTrack);
+      stream.removeEventListener('removetrack', handleTrack);
+    };
   }, [stream]);
 
   return <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />;
